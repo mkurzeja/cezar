@@ -1,4 +1,4 @@
-import type { ProcessUsage, RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
+import type { ForgeKind, ProcessUsage, RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
 import { groupTitle, runTitle, type ListView } from '@/lib/task-groups'
 
 /**
@@ -129,18 +129,6 @@ export function githubRepoBase(remote: string | undefined): string | undefined {
   const repo = parts[parts.length - 1]
   return owner && repo ? `https://github.com/${owner}/${repo}` : undefined
 }
-
-/**
- * Which forge a project's remote belongs to, for the one thing this module needs it for: knowing
- * how that forge SPELLS a reference URL.
- *
- * Declared here rather than imported because the contract's `projects.forge` is still the literal
- * `'github'` on this branch — the widening lands with the server's classifier (spec
- * `2026-09-20-gitlab-forge-support`, Phase 2 step 4). The narrower contract value assigns into this
- * union without a cast, so the day it widens this alias can be deleted and the contract's own
- * `ForgeKind` imported in its place; nothing else has to move.
- */
-export type ForgeKind = 'github' | 'gitlab'
 
 /**
  * How a forge spells the path to a reference, under the repository's web root.

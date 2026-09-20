@@ -77,10 +77,15 @@ import {
   putAgentConfigFile,
   retryProviderAuth,
 } from './client'
-import { queryScope, REFERENCE_STATUS_MAX, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
+import {
+  queryScope,
+  REFERENCE_STATUS_MAX,
+  runnerDiscoversModels,
+  type ForgeKind,
+} from '@open-mercato/cezar-api-client'
 import { useProjectScope } from './project-scope-context'
 import { isReferenceStatus } from '@/lib/reference-status'
-import { githubRepoBase, type ForgeKind } from '@/lib/tasks-table'
+import { githubRepoBase } from '@/lib/tasks-table'
 import { normalizeTagsForDisplay } from '@/lib/project-tags'
 import type { ContinueOptions } from './client'
 import type {

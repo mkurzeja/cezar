@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { forgeKindSchema } from './health.ts';
 
 /**
  * The project-registry family: `GET/POST/PATCH/DELETE /api/v1/projects`, the folder picker
@@ -35,7 +36,7 @@ export const projectListEntrySchema = z.object({
   /** Which forge this project's remote belongs to (#698) — classified server-side from the
    *  remote URL alone, plus the hosts `glab` is already authenticated against (GitLab spec D1).
    *  Gates the project group's GitHub nav item; omitted = no forge remote. */
-  forge: z.enum(['github', 'gitlab']).optional(),
+  forge: forgeKindSchema.optional(),
   /**
    * The remote's web root, `https://github.com/owner/repo` (`https://gitlab.example/group/sub/proj`
    * on a GitLab remote — the FULL path, subgroups included). Rebuilt server-side from the parsed

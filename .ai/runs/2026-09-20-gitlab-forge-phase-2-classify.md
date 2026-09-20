@@ -12,8 +12,9 @@ hostname — without a cezar config file, and make every URL it builds from a re
 nested project paths self-hosted GitLab actually uses.
 
 Still **no GitLab driver and no working tab** (spec Phase 3). What changes for a GitLab user after
-this phase is that `forge: 'gitlab'` and a correct `repoUrl` appear in `/projects` and `/health`;
-what changes for a GitHub user is nothing at all.
+this phase is that `GET /projects` reports `forge: 'gitlab'` and a correct `repoUrl` for the
+project; `/health` keeps reporting `forge: null`, because that field says which forge cezar can
+*serve*, and no driver exists yet. What changes for a GitHub user is nothing at all.
 
 ## 📋 Scope
 
