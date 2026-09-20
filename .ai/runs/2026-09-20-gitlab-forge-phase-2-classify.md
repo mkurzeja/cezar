@@ -146,27 +146,29 @@ Two environment artifacts recorded on the Phase 1 run apply here too and are not
 
 ## Progress
 
+PR: #3
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Widen the forge kind
 
-- [ ] 1.1 Widen `ForgeKind` and both contract mirrors to `'github' | 'gitlab'`
-- [ ] 1.2 Cover the widened value in the contract/health/projects suites
+- [x] 1.1 Widen `ForgeKind` and both contract mirrors to `'github' | 'gitlab'` — fde1e77f
+- [x] 1.2 Cover the widened value in the contract/health/projects suites — 5a696f4d
 
 ### Phase 2: Subgroup-safe remote parsing
 
-- [ ] 2.1 Add `projectPath` to `ParsedRemote` and rebuild `forgeWebRoot` from it
-- [ ] 2.2 Table-driven remote fixtures incl. three-level subgroups
+- [x] 2.1 Add `projectPath` to `ParsedRemote` and rebuild `forgeWebRoot` from it — 60b148e4
+- [x] 2.2 Table-driven remote fixtures incl. three-level subgroups — 60b148e4
 
 ### Phase 3: The glab-hosts loader
 
-- [ ] 3.1 `forge/glab-hosts.ts` — precedence, `hosts:` keys only, mtime cache, silent degrade
-- [ ] 3.2 Fixture tests incl. the assertion that no token value is ever returned or logged
+- [x] 3.1 `forge/glab-hosts.ts` — precedence, `hosts:` keys only, mtime cache, silent degrade — 16f6b3e2
+- [x] 3.2 Fixture tests incl. the assertion that no token value is ever returned or logged — 16f6b3e2
 
 ### Phase 4: Classification without a host table
 
-- [ ] 4.1 `classifyRemote` = static table ∪ glab hosts; repoint the three readers
-- [ ] 4.2 Classification tests: self-hosted fixture host, absent host, github.com unchanged
+- [x] 4.1 `classifyRemote` = static table ∪ glab hosts; repoint the three readers — 5a696f4d
+- [x] 4.2 Classification tests: self-hosted fixture host, absent host, github.com unchanged — 5a696f4d
 
 ### Phase 5: Do not activate a 404 in the cockpit
 
