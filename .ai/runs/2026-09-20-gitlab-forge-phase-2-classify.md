@@ -178,5 +178,5 @@ PR: #3
 
 ### Phase 6: Validation
 
-- [x] 6.1 Full validation gate green — `npm run typecheck` ✅ · `npm test` ✅ 393 files / 7336 tests / 0 failures · `npm run test:unit` ✅ 36/36 · `npm run build` ✅ (`check:pack ok — 539 files`) · `npm run test:package` ✅ 16/16
-- [ ] 6.2 Authoritative review pass applied
+- [x] 6.1 Full validation gate green — `npm run typecheck` ✅ · `npm test` ✅ 393 files / 7337 tests / 0 failures · `npm run test:unit` ✅ 36/36 · `npm run build` ✅ (`check:pack ok — 539 files`) · `npm run test:package` ✅ 16/16 (re-run after the review fixes, 96d058a0)
+- [x] 6.2 Authoritative review pass applied — approve, no blockers/majors; three minors found and fixed in 96d058a0 (dead port entries in the glab config, a double remote parse with a comment that had gone stale, an undocumented `GLAB_CONFIG_DIR`)
