@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RunsIndexResponse } from '@open-mercato/cezar-contract';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
@@ -9,7 +9,23 @@ import { clearProjectProbeCache, listProjects, registerProject } from '../worksp
 import { ProjectContexts } from './project-context.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { createApp, type ServerDeps } from './server.ts';
-import { __seedRefStatusCacheForTests } from './forge/github.ts';
+import { fetchGithubRefStatus, __seedRefStatusCacheForTests } from './forge/github.ts';
+import { resolveForge } from './forge/index.ts';
+
+/**
+ * Spied, not stubbed: every route keeps its real behaviour, and these two are the only doors from
+ * a route to a forge. `resolveForge` is how a route gets a driver at all, and
+ * `fetchGithubRefStatus` is the function that would answer the statuses this route ships — so if
+ * `runs-index` ever stops reading the module-level cache and starts asking, one of them records it.
+ */
+vi.mock('./forge/index.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./forge/index.ts')>();
+  return { ...actual, resolveForge: vi.fn(actual.resolveForge) };
+});
+vi.mock('./forge/github.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./forge/github.ts')>();
+  return { ...actual, fetchGithubRefStatus: vi.fn(actual.fetchGithubRefStatus) };
+});
 
 /**
  * `GET /api/v1/workspace/runs-index` — the ⌘K palette's cross-project task finder.
@@ -379,6 +395,40 @@ describe('workspace runs index API', () => {
         prs: { 40: 'ready', 42: 'merged' },
         issues: { 12: 'completed' },
       });
+    });
+
+    /**
+     * The half of this route's contract that a refactor can break while it keeps answering.
+     * BACKWARD_COMPATIBILITY.md §2: reading `runs-index` is **side-effect free** — it must not
+     * build a project context (building one prunes worktrees and `recover()`s interrupted runs)
+     * and it must not fetch from the forge. Break either and the payload still looks right.
+     *
+     * This is the reason the ref-status cache is a module of its own (`forge/ref-status-cache.ts`)
+     * rather than state hanging off a per-project driver: the only way to read a driver's cache is
+     * to have a driver, and the only way to have a driver here is to build the context this route
+     * is forbidden to build. A search box must not restart agents.
+     */
+    it('reads the cache without building a context or asking the forge', async () => {
+      await registerProject(repoRoot);
+      const other = await registerProject(otherRoot);
+      const run = store.createRun({ title: 'Has a PR', workflow: 'build', task: 't', steps: [] });
+      store.updateRun(run.id, { pullRequestUrl: 'https://github.com/acme/demo/pull/42' });
+      seedColdProject(otherRoot, [storedRun({ id: 'cold-1', title: 'Cold task' })]);
+      __seedRefStatusCacheForTests(realpathSync(repoRoot), [[42, { kind: 'pr', status: 'merged' }]]);
+      const contexts = new ProjectContexts({ listProjects });
+      vi.mocked(resolveForge).mockClear();
+      vi.mocked(fetchGithubRefStatus).mockClear();
+
+      const body = await getIndex({ contexts });
+
+      expect(resolveForge).not.toHaveBeenCalled();
+      expect(fetchGithubRefStatus).not.toHaveBeenCalled();
+      expect(contexts.peek(other.id)).toBeUndefined();
+      expect(contexts.ids()).toEqual([]);
+      // And it really did the read — otherwise "nothing was called" would pass vacuously.
+      const project = Object.keys(body.referenceStatuses)[0]!;
+      expect(body.referenceStatuses[project]).toEqual({ prs: { 42: 'merged' }, issues: {} });
+      contexts.disposeAll();
     });
   });
 });

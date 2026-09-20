@@ -7,10 +7,13 @@ import type {
   DraftPrInput,
   DraftPrOutcome,
   ForgeAvailability,
+  ForgeChecksData,
+  ForgeChecksGlyph,
   ForgeComment,
   ForgeCommentsData,
   ForgeDriver,
   ForgeItem,
+  ForgeListData,
   ForgeMergeInput,
   ForgeMergeMethod,
   ForgeMergeResult,
@@ -20,10 +23,35 @@ import type {
   ForgePrStatus,
   ForgePrDiffResult,
   ForgeRefKind,
+  ForgeRefStatusData,
+  ForgeRefStatusInput,
   ForgeSearchData,
   ForgeTimelineEvent,
   ForgeTimelineEventKind,
+  Mergeability,
+  ReferenceStatus,
+  ResolvedReference,
 } from './types.ts';
+// The ref-status cache lives OUTSIDE this driver on purpose — `GET /workspace/runs-index` reads it
+// with nothing but a repo root, and must stay able to. See that module's header; this driver is one
+// of its readers, not its owner.
+import {
+  batchRecheckAfter,
+  peekFreshRefStatus,
+  peekRefStatusUnknownSince,
+  refStatusRecheckAfter,
+  storeRefStatus,
+  REF_STATUS_TTL_MS,
+} from './ref-status-cache.ts';
+
+// Re-exported so the `server/github.ts` delegate, the driver's own suite and every existing
+// importer keep resolving these at the spelling they already use.
+export {
+  forgetRefStatus,
+  readCachedRefStatuses,
+  __clearRefStatusCacheForTests,
+  __seedRefStatusCacheForTests,
+} from './ref-status-cache.ts';
 
 /**
  * The GitHub forge driver — all `gh`-CLI logic in one place, moved here from
@@ -171,19 +199,9 @@ function mockGithubPrDiff(number: number): ForgePrDiffResult {
 /** One GitHub issue or pull request, flattened for the cockpit's GitHub tab. */
 export type GithubItem = ForgeItem;
 
-export interface GithubData {
-  available: boolean;
-  /** Human-readable hint when unavailable (`gh` missing, no remote, offline…). */
-  reason?: string;
-  /** owner/name, when known. */
-  repo?: string;
-  syncedAt?: string;
-  issues: GithubItem[];
-  prs: GithubItem[];
-  /** Repo-wide map of label name → 6-hex color (no `#`), so the UI can tint chips like GitHub
-   *  does. Additive (BACKWARD_COMPATIBILITY): absent on old payloads, chips fall back to neutral. */
-  labelColors?: Record<string, string>;
-}
+/** The `/api/github` list payload. An alias, not a second declaration: the shape is the seam's
+ *  (`ForgeListData`), and this name is what every existing importer already says. */
+export type GithubData = ForgeListData;
 
 // `gh … --json` output — validated at the boundary, extras stripped.
 const ghAuthor = z.object({ login: z.string() }).nullish();
@@ -1173,11 +1191,9 @@ export async function fetchCommitChecks(
 // subprocess, and any failure degrades to absent glyphs rather than failing the tab.
 
 /** The single enum a PR row's checks glyph renders (never `undefined` on the wire). */
-export type ChecksGlyph = 'passing' | 'failing' | 'pending' | null;
+export type ChecksGlyph = ForgeChecksGlyph;
 
-export type GithubChecksData =
-  | { available: true; checks: Record<number, ChecksGlyph> }
-  | { available: false; reason: string };
+export type GithubChecksData = ForgeChecksData;
 
 /** PR numbers per checks query. Aliases resolve independently (a failed chunk costs only its own
  *  glyphs); bounded so an unbounded number list can't blow the query size limit. Also the route's
@@ -1333,35 +1349,9 @@ function mockGithubChecks(numbers: number[]): GithubChecksData {
 // Deliberately NOT `prMergeState`: that answers "may I press Merge on THIS one" and costs a
 // request (plus a merge-policy lookup) per PR. A table needs a glyph per row, not a merge gate.
 
-/** Where a referenced PR or issue stands. Mirrored by `referenceStatusSchema` in the contract —
- *  see there for why PR `closed` and issue `completed` are separate words. */
-export type ReferenceStatus =
-  | 'draft'
-  | 'review-required'
-  | 'changes-requested'
-  | 'checks-pending'
-  | 'checks-failing'
-  | 'ready'
-  | 'merged'
-  | 'closed'
-  | 'open'
-  | 'completed'
-  | 'not-planned';
+export type { ReferenceStatus };
 
-export type GithubRefStatusData =
-  | {
-      available: true;
-      prs: Record<number, ReferenceStatus>;
-      issues: Record<number, ReferenceStatus>;
-      /** The OPEN pull requests among them that do not merge into their base — the second axis,
-       *  never folded into a status. Optional on the wire, and absent means "nothing is known"
-       *  rather than "no conflicts"; see `conflicts` in the contract. */
-      conflicts?: number[];
-      /** When to ask again, or `null` when nothing here can change. See `recheckAfterMs` in the
-       *  contract for why the SERVER answers this. */
-      recheckAfterMs: number | null;
-    }
-  | { available: false; reason: string; recheckAfterMs: number | null };
+export type GithubRefStatusData = ForgeRefStatusData;
 
 /** Numbers per kind in one ref-status query — the same bound, and for the same reasons, as
  *  `GH_CHECKS_MAX`: aliases resolve independently, and the query size stays finite. Taken from the
@@ -1631,24 +1621,10 @@ export function derivePrReferenceStatus(pr: {
   return 'ready';
 }
 
-/**
- * Whether this pull request's branch merges into its base — the OTHER axis, kept out of
- * `derivePrReferenceStatus` on purpose (see `conflicts` in the contract).
- *
- * Three values, and the third is the one that matters. GitHub does not store mergeability; it
- * COMPUTES it when asked, and answers `UNKNOWN` while the background job runs — which is the
- * normal answer for the first seconds after every push, and therefore for exactly the moment a
- * cockpit is most likely to be looking. `UNKNOWN` means *we were not told*, never *it is clean*,
- * and the caller must be able to tell those apart: it is what decides how soon to ask again
- * (`refStatusTtl`), and answering it as "not conflicting" with a one-minute TTL is precisely how a
- * conflicting pull request came to sit there wearing "Ready to merge".
- *
- * `undefined` for anything the question does not apply to: an issue, and a merged or closed pull
- * request (GitHub says `UNKNOWN` for those too, forever, and a terminal PR has no conflict left to
- * resolve — a merged PR wearing a conflict chip is a lie the state alone rules out).
- */
-export type Mergeability = 'mergeable' | 'conflicting' | 'unknown';
+export type { Mergeability };
 
+/** GitHub's `mergeable` field, read as the tri-state the seam defines — see `Mergeability` in
+ *  `types.ts` for why `unknown` must survive as a value rather than collapse into "clean". */
 export function mergeabilityOf(state: string, mergeable: string | null | undefined): Mergeability | undefined {
   if (state.toUpperCase() !== 'OPEN') return undefined;
   switch (mergeable?.toUpperCase()) {
@@ -1687,16 +1663,7 @@ export function deriveIssueReferenceStatus(issue: {
 
 /** What one number turned out to be, and where it stands. `kind` is the forge's answer, not the
  *  caller's guess — see `refStatusQuery`. */
-export interface ResolvedReference {
-  kind: 'pr' | 'issue';
-  status: ReferenceStatus;
-  /** Where this pull request stands on the OTHER axis, or absent when the question does not
-   *  apply (an issue, a merged or closed PR). Deliberately not folded into `status`; see
-   *  `mergeabilityOf`, and `conflicts` in the contract. `unknown` is kept as a value rather than
-   *  collapsed into "not conflicting", because it is the difference between an answer and a
-   *  question GitHub has not finished answering. */
-  mergeable?: Mergeability;
-}
+export type { ResolvedReference };
 
 /**
  * The outcome of one batched lookup. `failed` is what separates *this number is not in the
@@ -1793,82 +1760,6 @@ export async function fetchRefStatuses(
   return out;
 }
 
-// Per-reference cache: keyed `repoRoot␀number` — by NUMBER, not by kind, because the kind is now
-// something the forge answers rather than something the caller asserts. Same 60 s TTL and bounded
-// shape as the checks cache; `null` is a cached "this repository has no such number", so a
-// transcript-scraped number from another repo is not re-queried on every table repaint.
-//
-// `unknownSince` is when this reference FIRST came back with its mergeability still being
-// computed, carried across refreshes so the fast recheck below is bounded to that first window
-// rather than restarting on every answer that is still `unknown`.
-const refStatusCache = new Map<
-  string,
-  { at: number; resolved: ResolvedReference | null; unknownSince?: number }
->();
-const REF_STATUS_CACHE_MAX = 500;
-
-/** Test-only: drop the per-reference cache so cases don't leak state into each other. */
-export function __clearRefStatusCacheForTests(): void {
-  refStatusCache.clear();
-}
-
-/** Test-only: warm the cache the way the lazy route would have, so a reader can be tested
- *  without a forge behind it. */
-export function __seedRefStatusCacheForTests(
-  repoRoot: string,
-  entries: Array<[number, ResolvedReference]>,
-): void {
-  for (const [number, resolved] of entries) {
-    refStatusCache.set(refStatusKey(repoRoot, number), { at: Date.now(), resolved });
-  }
-}
-
-/**
- * Forget what we knew about one reference, so the next read asks GitHub again.
- *
- * Called where cezar itself CHANGES a pull request — it merges one, it opens one — because those
- * are the only forge changes this process can know about without asking. Everything else has to
- * be polled (GitHub cannot push to a cockpit with no public endpoint), but waiting out a TTL to
- * notice our own merge is a self-inflicted staleness: for up to a minute every chip would keep
- * showing the pre-merge status of a pull request the user watched this server merge.
- *
- * Deleting rather than overwriting with a guessed `merged`: the forge is the authority on what a
- * reference is, and a mutation that reports success is still not the same as having read the
- * result. The next reader pays one query and gets the truth — after which the answer is `merged`,
- * `recheckAfterMs` goes null, and the cockpit stops polling that batch entirely. Invalidating here
- * therefore REDUCES long-run traffic rather than adding to it.
- */
-export function forgetRefStatus(repoRoot: string, number: number): void {
-  refStatusCache.delete(refStatusKey(repoRoot, number));
-}
-
-/**
- * Everything the cache ALREADY knows about these numbers. Never spawns `gh`, never awaits.
- *
- * This is what lets a status ride along with the rows that carry the references, instead of the
- * cockpit fetching it separately a moment later: the run index reads whatever is warm and ships
- * it, and a cold entry is simply absent — the lazy `/github/ref-status` route stays the thing that
- * actually goes and asks.
- *
- * Because it cannot cost anything, the caller may pass a SUPERSET of the numbers it will really
- * display. That matters: deciding which of a run's references a chip shows is the cockpit's rule
- * (#407, #526), deliberately not duplicated server-side, and a cache read does not need to know —
- * it can look up every number a run mentions and let the client pick.
- */
-export function readCachedRefStatuses(
-  repoRoot: string,
-  numbers: Iterable<number>,
-): { prs: Record<number, ReferenceStatus>; issues: Record<number, ReferenceStatus> } {
-  const out = { prs: {} as Record<number, ReferenceStatus>, issues: {} as Record<number, ReferenceStatus> };
-  const now = Date.now();
-  for (const number of new Set(numbers)) {
-    const hit = refStatusCache.get(refStatusKey(repoRoot, number));
-    if (!hit || !hit.resolved || now - hit.at >= refStatusTtl(hit.resolved, hit.unknownSince, now)) continue;
-    out[hit.resolved.kind === 'pr' ? 'prs' : 'issues'][number] = hit.resolved.status;
-  }
-  return out;
-}
-
 /** The `#N` in a forge URL — `…/pull/774` → 774. Null when the tail is not a number, so a URL
  *  shape we do not recognise invalidates nothing rather than inventing a key. */
 export function refNumberFromUrl(url: string): number | null {
@@ -1876,85 +1767,6 @@ export function refNumberFromUrl(url: string): number | null {
   const parsed = last ? Number(last[1]) : Number.NaN;
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
-
-/** A closed issue or an abandoned PR can be REOPENED, so this is long rather than forever — but
- *  it is the rare event, and re-asking a hundred settled references every minute to catch it is
- *  the wrong trade. */
-const REF_STATUS_CLOSED_TTL = 10 * 60_000;
-/** A merged pull request is merged forever: GitHub has no un-merge. Capped at a day only so a
- *  long-lived server eventually re-reads rather than trusting a value from another era. */
-const REF_STATUS_MERGED_TTL = 24 * 60 * 60_000;
-
-/**
- * How long a cached answer stays fresh — by how changeable that answer IS.
- *
- * One TTL for everything gets both ends wrong: it re-asks about a merged PR (which cannot change)
- * every minute, and it is the only thing standing between a running CI job and a stale chip. What
- * a reader wants rechecked is precisely what is still moving.
- *
- * A number the repository does not have keeps the short TTL: it is usually a wrong number, but it
- * is also what a reference to a not-yet-created PR looks like, and re-asking is cheap.
- */
-function refStatusTtl(entry: ResolvedReference | null, unknownSince?: number, now = Date.now()): number {
-  if (!entry) return CACHE_MS;
-  // Mergeability GitHub has not finished computing is not an answer to cache for a minute. It is
-  // the normal reply for the first seconds after a push, and holding it that long is what let a
-  // conflicting pull request read "Ready to merge" until the page was reloaded. Ask again in
-  // seconds instead — and only while it is still plausibly being computed, so a repository that
-  // answers `UNKNOWN` indefinitely settles back to the ordinary cadence rather than spawning `gh`
-  // every few seconds forever.
-  if (
-    entry.mergeable === 'unknown' &&
-    unknownSince !== undefined &&
-    now - unknownSince < MERGEABILITY_UNKNOWN_WINDOW_MS
-  ) {
-    return MERGEABILITY_UNKNOWN_TTL_MS;
-  }
-  switch (entry.status) {
-    case 'merged':
-      return REF_STATUS_MERGED_TTL;
-    case 'closed':
-    case 'completed':
-    case 'not-planned':
-      return REF_STATUS_CLOSED_TTL;
-    default:
-      return CACHE_MS;
-  }
-}
-
-/** How long a status can be trusted to stay put — `null` when it can never change again. The
- *  cadence half of `refStatusTtl`, and deliberately the same function: a value the cache would
- *  still be serving is a value there is no point asking for, and a value it would NOT serve —
- *  mergeability still being computed — is one the cockpit should come back for just as soon. */
-function refStatusRecheckAfter(entry: ResolvedReference | null, unknownSince?: number, now = Date.now()): number | null {
-  if (entry?.status === 'merged') return null; // GitHub has no un-merge
-  return refStatusTtl(entry, unknownSince, now);
-}
-
-/** How long the WHOLE answer holds — the soonest any single reference in it could differ. `null`
- *  only when every one of them is immutable, which is what tells the cockpit to stop scheduling.
- *  Taking the per-reference values rather than the entries, because one of them may be on the fast
- *  mergeability cadence and the batch has to travel at the speed of its most impatient member. */
-function batchRecheckAfter(rechecks: (number | null)[]): number | null {
-  let soonest: number | null = null;
-  for (const after of rechecks) {
-    if (after === null) continue;
-    soonest = soonest === null ? after : Math.min(soonest, after);
-  }
-  return soonest;
-}
-
-/**
- * How long a still-computing mergeability holds, and for how long that fast cadence applies.
- *
- * Five seconds because that is the shape of the thing being waited for: GitHub kicks off the
- * merge-base computation when asked and usually has it by the next request. Bounded to a minute
- * because a value that is STILL unknown after that is not a computation in flight any more — it is
- * a repository that will not answer, and re-asking it every five seconds forever costs a `gh`
- * subprocess a second for nothing.
- */
-const MERGEABILITY_UNKNOWN_TTL_MS = 5_000;
-const MERGEABILITY_UNKNOWN_WINDOW_MS = 60_000;
 
 /** A forge that could not be reached is worth retrying, and worth not hammering: a workspace with
  *  no `gh` installed would otherwise spawn a subprocess a minute, forever, to be told the same
@@ -2038,7 +1850,7 @@ function hasResolvedRepository(stdout: string): boolean {
  */
 export async function fetchGithubRefStatus(
   repoRoot: string,
-  input: { prs?: number[]; issues?: number[] },
+  input: ForgeRefStatusInput,
 ): Promise<GithubRefStatusData> {
   const asPrs = sanitizeRefNumbers(input.prs);
   const asIssues = sanitizeRefNumbers(input.issues);
@@ -2062,8 +1874,8 @@ export async function fetchGithubRefStatus(
   const misses: number[] = [];
   const now = Date.now();
   for (const n of wanted) {
-    const hit = refStatusCache.get(refStatusKey(repoRoot, n));
-    if (!hit || now - hit.at >= refStatusTtl(hit.resolved, hit.unknownSince, now)) misses.push(n);
+    const hit = peekFreshRefStatus(repoRoot, n, now);
+    if (!hit) misses.push(n);
     else file(n, hit.resolved, hit.unknownSince);
   }
   if (misses.length === 0) {
@@ -2095,20 +1907,9 @@ export async function fetchGithubRefStatus(
       // reference FIRST came back still-computing, so a forge that never resolves it cannot hold
       // the batch on a five-second poll indefinitely.
       const unknownSince =
-        entry?.mergeable === 'unknown'
-          ? (refStatusCache.get(refStatusKey(repoRoot, n))?.unknownSince ?? storedAt)
-          : undefined;
+        entry?.mergeable === 'unknown' ? (peekRefStatusUnknownSince(repoRoot, n) ?? storedAt) : undefined;
       file(n, entry, unknownSince);
-      refStatusCache.set(refStatusKey(repoRoot, n), {
-        at: storedAt,
-        resolved: entry,
-        ...(unknownSince === undefined ? {} : { unknownSince }),
-      });
-    }
-    while (refStatusCache.size > REF_STATUS_CACHE_MAX) {
-      const oldest = refStatusCache.keys().next().value;
-      if (oldest === undefined) break;
-      refStatusCache.delete(oldest);
+      storeRefStatus(repoRoot, n, { at: storedAt, resolved: entry, unknownSince });
     }
     // Anything unasked makes the whole answer `unavailable`, deliberately. The alternative is a
     // payload where a number we could not reach is indistinguishable from one that does not exist,
@@ -2141,11 +1942,6 @@ export async function fetchGithubRefStatus(
   }
 }
 
-/** NUL separator, as everywhere else here: two projects each having a #42 must not collide. */
-function refStatusKey(repoRoot: string, number: number): string {
-  return `${repoRoot}\0#${number}`;
-}
-
 function sanitizeRefNumbers(numbers: number[] | undefined): number[] {
   return [...new Set(numbers ?? [])].filter((n) => Number.isInteger(n) && n > 0).slice(0, GH_REF_STATUS_MAX);
 }
@@ -2155,7 +1951,7 @@ function mockGithubRefStatus(prs: number[], issues: number[]): GithubRefStatusDa
   const catalog = mockGithub();
   const byPr = new Map(catalog.prs.map((p) => [p.number, p]));
   const byIssue = new Set(catalog.issues.map((i) => i.number));
-  const out: GithubRefStatusData = { available: true, prs: {}, issues: {}, recheckAfterMs: CACHE_MS };
+  const out: GithubRefStatusData = { available: true, prs: {}, issues: {}, recheckAfterMs: REF_STATUS_TTL_MS };
   for (const n of prs) {
     const pr = byPr.get(n);
     if (pr) {
@@ -2898,6 +2694,18 @@ export function createGithubDriver(repoRoot: string, repoRef: GithubRepoRef | nu
     listIssues: async (opts) => (await fetchGithub(repoRoot, opts?.refresh, opts?.limit)).issues,
 
     listPRs: async (opts) => (await fetchGithub(repoRoot, opts?.refresh, opts?.limit)).prs,
+
+    // The read tier, promoted onto the seam (GitLab spec Phase 1): each of these is the whole of
+    // what one `/api/v1/github/*` route answers, so a route needs a driver and nothing else. The
+    // functions below are unchanged and still exported — the tests and the `server/github.ts`
+    // delegate address them directly — but the ROUTES now come through here.
+    listItems: (opts) => fetchGithub(repoRoot, opts?.refresh, opts?.limit),
+
+    comments: (kind, number, opts) => fetchGithubComments(repoRoot, kind, number, opts?.refresh),
+
+    prChecks: (numbers) => fetchGithubChecks(repoRoot, numbers),
+
+    refStatus: (input) => fetchGithubRefStatus(repoRoot, input),
 
     // The open-only list tier's escape hatch (#730) — this is the only path that can reach a
     // closed or merged item.
