@@ -90,8 +90,8 @@ remote-less checkout.
 
 ### Phase 1: Read tier on ForgeDriver
 
-- [ ] 1.1 Promote the read-tier payload types into `forge/types.ts`, aliasing the existing `Github*` names
-- [ ] 1.2 Add the read-tier methods to `ForgeDriver` and implement them on the GitHub driver by delegation
+- [x] 1.1 Promote the read-tier payload types into `forge/types.ts`, aliasing the existing `Github*` names — 29d2b28c
+- [x] 1.2 Add the read-tier methods to `ForgeDriver` and implement them on the GitHub driver by delegation — 29d2b28c
 
 ### Phase 2: Extract the ref-status cache
 
