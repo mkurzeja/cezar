@@ -22,7 +22,10 @@ export const backendCheckSchema = z.object({
 export type BackendCheck = z.infer<typeof backendCheckSchema>;
 
 export const forgeInfoSchema = z.object({
-  kind: z.literal('github'),
+  /** Mirrors `ForgeKind` (`src/server/forge/types.ts`). An enum rather than a literal since the
+   *  GitLab spec's Phase 2: additive, so a consumer that only knows `'github'` is unaffected, but
+   *  one that switches on this must treat an unrecognized value as "some forge". */
+  kind: z.enum(['github', 'gitlab']),
   /**
    * Whether the forge is reachable — **absent until the availability probe has warmed**.
    *

@@ -9,7 +9,20 @@ import type { RunRecord } from '../../runs/store.ts';
  * driver file behind `resolveForge`, no route or UI changes.
  */
 
-export type ForgeKind = 'github';
+/**
+ * Which forge a project's remote belongs to (GitLab spec Phase 2, step 4).
+ *
+ * Widening this is additive and value-level: no route, response shape or wire key changes, and a
+ * consumer that ignores `'gitlab'` sees exactly what it saw before. It is mirrored — never
+ * re-derived — by `health.forge.kind` and `projects.forge?` in `packages/contract`; the three must
+ * widen together or `contract-parity*.test.ts` fails, which is the point of asserting both
+ * directions.
+ *
+ * `'gitlab'` covers gitlab.com AND an arbitrary self-hosted instance. There is deliberately no
+ * separate kind for self-hosted: the hostname is not the forge, and a `gitlab-selfhosted` value
+ * would push every consumer into a two-value check for one product.
+ */
+export type ForgeKind = 'github' | 'gitlab';
 
 /** Availability probe result — mirrors the tab's quiet degradation contract:
  *  no CLI, no remote, offline all land on `available:false` + a human hint. */
