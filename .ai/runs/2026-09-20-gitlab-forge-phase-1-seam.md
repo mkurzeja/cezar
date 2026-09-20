@@ -66,6 +66,17 @@ all — which is what the offline demo and the whole `/api/v1/github/*` test sui
 definition. `resolveForge` itself is untouched, so `/health` keeps reporting `forge: null` for a
 remote-less checkout.
 
+## 🧪 Validation notes
+
+- `TMPDIR` in this run's sandbox pointed **inside** the repository, which put every
+  `mkdtempSync(tmpdir())` fixture inside a git checkout and made six pre-existing health/projects
+  assertions (`expect(body.repo).toBeNull()` for "a tmp dir — not a git repo") fail on code this
+  branch does not touch. Re-running with `TMPDIR=/tmp` is green. An environment artifact, not a
+  finding, but worth recording: those tests assume the system temp dir is outside any repository.
+- One web test (`github.test.tsx`, "Custom prompt") failed once on a heavily loaded full-suite run
+  and passes both in isolation and on a clean re-run of the whole web suite — a `waitFor` timeout
+  under contention. This branch changes no cockpit code.
+
 ## ⚠️ Risks
 
 - **The ref-status / `runs-index` invariant** — highest risk here, because breaking it still
@@ -105,5 +116,5 @@ remote-less checkout.
 
 ### Phase 4: Validation
 
-- [ ] 4.1 Full validation gate green
+- [x] 4.1 Full validation gate green — `npm run typecheck` ✅ · `npm test` ✅ (server 1388/1388, web+api-client+contract 3876/3876) · `npm run test:unit` ✅ 36/36 · `npm run build` ✅ (`check:pack ok`) · `npm run test:package` ✅ 16/16
 - [ ] 4.2 Authoritative review pass applied
