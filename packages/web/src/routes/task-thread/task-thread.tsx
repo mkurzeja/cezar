@@ -11,7 +11,7 @@ import {
   usePatchRun,
   useRemoveQueuedMessage,
   useRun,
-  useProjectRepoBase,
+  useProjectRepo,
   useRuns,
 } from '@/api/queries'
 import { useRunHistory, type RunHistoryState } from '@/api/run-history'
@@ -299,8 +299,10 @@ export function ThreadView({
     return actions
   }, [edit, run.queuedMessages])
   // #526: the footer's issue link may be synthesized from the CEZ:ISSUE marker, and the only
-  // repository it may ever name is the one on screen — never the transcript's.
-  const issueUrl = taskIssueUrl(run, useProjectRepoBase())
+  // repository it may ever name is the one on screen — never the transcript's. Its forge comes
+  // from that same resolution, so the path under that root is spelled the way the forge spells it.
+  const projectRepo = useProjectRepo()
+  const issueUrl = taskIssueUrl(run, projectRepo.base, projectRepo.forge)
   const { search } = useLocation()
   const mode = threadRenderMode(search, rows.length)
   const scroll = useThreadScroll(`${run.id}:main`, {

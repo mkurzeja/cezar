@@ -11,6 +11,7 @@ import type { GithubRefStatusData } from '@open-mercato/cezar-api-client'
 import {
   refStatusRecheckAfter,
   useReferenceProjectId,
+  useProjectRepo,
   useProjectRepoBase,
   queryKeys,
   useProviderStatus,
@@ -1067,6 +1068,46 @@ describe('useProjectRepoBase', () => {
       wrapper: mounted(null, { ...HEALTH, bootProject: 'boot-id', repo: { remote: 'git@github.com:o/boot.git' } }, []),
     })
     expect(result.current).toBe('https://github.com/o/boot')
+  })
+
+  // The base and the forge have to come out of ONE resolution, or a GitLab project eventually
+  // gets paired with GitHub's `/pull/N` spelling — a hard 404 on gitlab.com, not a redirect
+  // (spec 2026-09-20-gitlab-forge-support §Identifiers).
+  describe('useProjectRepo — the forge travels with the base', () => {
+    // `forge: 'gitlab'` is what the Phase 2 server will serve; the contract literal on this branch
+    // is still `'github'`, which is why these fixtures go in as untyped cache data.
+    const MIXED = [
+      { id: 'boot-id', name: 'boot', root: '/home/me/cezar', repoUrl: 'https://github.com/o/boot', forge: 'github' },
+      { id: 'proj-gl', name: 'gl', root: '/home/me/gl', repoUrl: 'https://gitlab.example.com/g/sub/p', forge: 'gitlab' },
+      { id: 'proj-old', name: 'old', root: '/home/me/old', repoUrl: 'https://github.com/o/old' },
+    ]
+    const health = { ...HEALTH, bootProject: 'boot-id', repo: { remote: 'git@github.com:o/boot.git' } }
+
+    it('reads both halves off the SAME registry row', () => {
+      const { result } = renderHook(() => useProjectRepo(), {
+        wrapper: mounted('proj-gl', health, MIXED),
+      })
+      expect(result.current).toEqual({ base: 'https://gitlab.example.com/g/sub/p', forge: 'gitlab' })
+    })
+
+    it('leaves a row with no classification unclassified — the caller spells GitHub, as before', () => {
+      const { result } = renderHook(() => useProjectRepo(), {
+        wrapper: mounted('proj-old', health, MIXED),
+      })
+      expect(result.current).toEqual({ base: 'https://github.com/o/old', forge: undefined })
+    })
+
+    it('calls the health fallback github, because `githubRepoBase` cannot return anything else', () => {
+      const { result } = renderHook(() => useProjectRepo(), { wrapper: mounted(null, health, []) })
+      expect(result.current).toEqual({ base: 'https://github.com/o/boot', forge: 'github' })
+    })
+
+    it('names no forge when there is no base to spell a path under', () => {
+      const { result } = renderHook(() => useProjectRepo(), {
+        wrapper: mounted('proj-gl', health, []),
+      })
+      expect(result.current).toEqual({ base: undefined, forge: undefined })
+    })
   })
 })
 
