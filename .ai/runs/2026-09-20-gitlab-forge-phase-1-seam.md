@@ -95,8 +95,8 @@ remote-less checkout.
 
 ### Phase 2: Extract the ref-status cache
 
-- [ ] 2.1 Extract the cache into `forge/ref-status-cache.ts`, module-level and context-free
-- [ ] 2.2 Regression test: `runs-index` builds no context and makes no forge call, proven red without the fix
+- [x] 2.1 Extract the cache into `forge/ref-status-cache.ts`, module-level and context-free — 52d65e86
+- [x] 2.2 Regression test: `runs-index` builds no context and makes no forge call, proven red without the fix — 52d65e86
 
 ### Phase 3: Repoint the eight routes
 
