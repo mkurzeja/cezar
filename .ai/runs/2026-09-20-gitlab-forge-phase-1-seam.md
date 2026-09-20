@@ -98,12 +98,17 @@ files, 7299 tests, 0 failures**, plus 36/36 `test:unit`, `check:pack ok`, and 16
 - **Hono type inference.** A degrade written as a bare object literal widens `available: false` to
   `boolean` and erases the discriminant the contract narrows on (AGENTS.md § The HTTP API). Every
   degrade value is annotated with its payload type instead; `contract-parity*.test.ts` is the check.
-- **One `getRepoInfo` per read request.** Resolving a driver costs 2–3 `git rev-parse` calls that
-  the direct imports did not pay. Accepted, unmemoized: the cockpit's forge queries are not polled
-  (`refetchInterval: false`, minute-scale `staleTime`), and a memo would trade a measured cost for
-  a stale-remote bug. The two merge routes have paid it since they were written.
+- **One `getRepoInfo` per read request.** Resolving a driver costs 2–3 `git rev-parse` spawns that
+  the direct imports did not pay — **measured at ~6.8 ms**. It lands on `/github/ref-status` cache
+  hits too, which were previously subprocess-free and can poll at a 5 s cadence while the forge is
+  still computing a PR's mergeability. Accepted, unmemoized: `/health` already calls `resolveForge`
+  at the same cadence and the two merge routes have paid it since they were written, and a memo
+  would trade a measured 6.8 ms for an unmeasured stale-remote window. The fix, if a profile ever
+  shows it: memoize remote→driver per repo root in `forge/index.ts`, in `detectCache`'s shape.
 
 ## Progress
+
+PR: #2
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
