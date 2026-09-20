@@ -36,14 +36,20 @@ import { parse as parseYaml } from 'yaml';
 function normalizeHost(raw: string): string | null {
   // glab stores bare hostnames, but a hand-edited config may carry a scheme or a trailing slash,
   // and a host entered as `GitLab.Example.COM` must still match a lowercased parsed remote.
+  //
+  // The PORT is dropped for the same reason: `parseRemote` never puts one in `host`
+  // (`ssh://git@gitlab.internal:2222/g/p` parses to `gitlab.internal`), so a `hosts:` entry that
+  // kept its port could never match anything and would be a silently dead row. An instance is
+  // identified by its hostname here, not by the port a particular remote reaches it on.
   const host = raw
     .trim()
     .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
     .replace(/\/.*$/, '')
+    .replace(/:\d+$/, '')
     .toLowerCase();
   // Deliberately strict: this value is compared against a parsed remote host and nothing else, so
   // anything that cannot BE a hostname is a malformed row to skip rather than a value to sanitize.
-  return /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:\d+)?$/.test(host) ? host : null;
+  return /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(host) ? host : null;
 }
 
 /**

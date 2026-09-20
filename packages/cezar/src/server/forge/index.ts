@@ -90,8 +90,16 @@ const FORGE_HOSTS: Record<string, ForgeKind> = { 'github.com': 'github', 'gitlab
  */
 export function classifyRemote(remote: string | undefined, repoRoot?: string): ForgeKind | null {
   const parsed = remote ? parseRemote(remote) : null;
-  if (!parsed) return null;
+  return parsed ? classifyParsed(parsed, repoRoot) : null;
+}
+
+/** The classification itself, off an already-parsed remote. Exists so the callers below — each of
+ *  which has the parse in hand — do not pay for a second one, and so the registry probe's "the
+ *  remote is already parsed" comment stays true. */
+function classifyParsed(parsed: ParsedRemote, repoRoot?: string): ForgeKind | null {
   const known = FORGE_HOSTS[parsed.host];
+  // The static table short-circuits, so a github.com or gitlab.com project never touches the
+  // filesystem here at all — only an unrecognized host pays the glab-config lookup.
   if (known) return known;
   return knownGlabHosts({ repoRoot }).includes(parsed.host) ? 'gitlab' : null;
 }
@@ -110,7 +118,7 @@ export function classifyRemote(remote: string | undefined, repoRoot?: string): F
  */
 export function forgeWebRoot(remote: string | undefined, repoRoot?: string): string | null {
   const parsed = remote ? parseRemote(remote) : null;
-  if (!parsed || classifyRemote(remote, repoRoot) === null) return null;
+  if (!parsed || classifyParsed(parsed, repoRoot) === null) return null;
   return `https://${parsed.host}/${parsed.projectPath}`;
 }
 
@@ -127,7 +135,7 @@ export function resolveForge(repoInfo: RepoInfo | null): ForgeDriver | null {
   if (!repoInfo?.remote) return null;
   const parsed = parseRemote(repoInfo.remote);
   if (!parsed) return null;
-  if (classifyRemote(repoInfo.remote, repoInfo.root) === 'github') {
+  if (classifyParsed(parsed, repoInfo.root) === 'github') {
     return createGithubDriver(repoInfo.root, { owner: parsed.owner, repo: parsed.repo });
   }
   return null;

@@ -284,7 +284,9 @@ async function computeProbe(root: string): Promise<RootProbe> {
   // `root` lets the classifier see a per-repo `.git/glab-cli/config.yml` — a self-hosted GitLab
   // the user authenticated for THIS checkout only still classifies.
   const forge = classifyRemote(info?.remote, root);
-  // Free: `getRepoInfo` already ran for the branch, and the remote is already parsed for `forge`.
+  // Cheap rather than free: `getRepoInfo` already ran for the branch, and a github.com/gitlab.com
+  // remote classifies off the static table without touching the filesystem — but this does parse
+  // the remote a second time, which the probe's own TTL cache is what keeps off the hot path.
   const repoUrl = forgeWebRoot(info?.remote, root);
   return {
     status: 'ok',

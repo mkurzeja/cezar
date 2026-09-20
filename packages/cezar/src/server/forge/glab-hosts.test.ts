@@ -146,13 +146,17 @@ describe('glab hosts discovery', () => {
     it('lowercases, and tolerates a scheme or path a hand-edited config might carry', () => {
       write(
         join(dir, 'home/.config/glab-cli/config.yml'),
-        config('GitLab.Example.COM', 'https://git.acme.internal/', 'ports.example.com:8443'),
+        config('GitLab.Example.COM', 'https://git.acme.internal/'),
       );
-      expect([...knownGlabHosts({ env: env() })].sort()).toEqual([
-        'git.acme.internal',
-        'gitlab.example.com',
-        'ports.example.com:8443',
-      ]);
+      expect([...knownGlabHosts({ env: env() })].sort()).toEqual(['git.acme.internal', 'gitlab.example.com']);
+    });
+
+    it('drops a port, because a parsed remote host never has one', () => {
+      // `parseRemote('ssh://git@ports.example.com:8443/g/p')` answers `ports.example.com`. A
+      // `hosts:` row that kept its port could therefore never match anything — a silently dead
+      // entry, which is worse than either behaviour.
+      write(join(dir, 'home/.config/glab-cli/config.yml'), config('ports.example.com:8443'));
+      expect(knownGlabHosts({ env: env() })).toEqual(['ports.example.com']);
     });
 
     it('picks up a config rewritten after it was cached', () => {
