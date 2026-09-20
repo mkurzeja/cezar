@@ -173,8 +173,8 @@ PR: #3
 
 ### Phase 5: Do not activate a 404 in the cockpit
 
-- [ ] 5.1 Forge-aware reference-URL synthesis, defaulting to today's GitHub shape
-- [ ] 5.2 Cockpit tests for both forges
+- [x] 5.1 Forge-aware reference-URL synthesis, defaulting to today's GitHub shape — 6dd94d00 (merged a66a0d26)
+- [x] 5.2 Cockpit tests for both forges — 6dd94d00, proven red without the fix
 
 ### Phase 6: Validation
 
