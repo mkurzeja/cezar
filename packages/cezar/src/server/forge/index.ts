@@ -84,4 +84,25 @@ export function resolveForge(repoInfo: RepoInfo | null): ForgeDriver | null {
   return null;
 }
 
+/**
+ * The driver a forge READ route serves from — identical to `resolveForge` in every real
+ * configuration, and different in exactly one: `CEZ_DRY_RUN=1`.
+ *
+ * The `/api/v1/github/*` routes used to import `fetchGithub*` directly, and every one of those
+ * functions answers its mock catalog before it looks at anything else — remote included. So the
+ * mocked forge has always been reachable from a scratch directory with no git remote at all, which
+ * is what the offline demo (`CEZ_DRY_RUN=1 npm run dev`) and the whole `/api/v1/github/*` test
+ * suite stand on, while `resolveForge` correctly answers `null` there. Routing those reads through
+ * a driver has to keep that, or dry-run quietly loses the tab.
+ *
+ * Deliberately NOT folded into `resolveForge`: `/health` reports `forge: null` for a remote-less
+ * checkout and must keep doing so. That field says which forge the project is ON, and mocking the
+ * CLI does not put it on one.
+ */
+export function resolveReadForge(repoRoot: string, repoInfo: RepoInfo | null): ForgeDriver | null {
+  const driver = resolveForge(repoInfo);
+  if (driver) return driver;
+  return process.env.CEZ_DRY_RUN === '1' ? createGithubDriver(repoRoot, null) : null;
+}
+
 export type { ForgeDriver, ForgeAvailability, ForgeItem, ForgeKind, ForgePrStatus, ForgeRefKind } from './types.ts';

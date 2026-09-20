@@ -185,8 +185,20 @@ import { agentHomePaths, expandTilde } from '../paths.ts';
 import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
-import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index.ts';
-import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX } from './github.ts';
+import { parseRemote, resolveForge, resolveReadForge, type ForgeAvailability } from './forge/index.ts';
+import { refNumberFromUrl, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX } from './github.ts';
+// Straight from the cache module, not through a driver: `/workspace/runs-index` reads it and is
+// side-effect free by contract, so this import must never need a project context. See
+// `forge/ref-status-cache.ts`.
+import { forgetRefStatus, readCachedRefStatuses } from './forge/ref-status-cache.ts';
+import type {
+  ForgeChecksData,
+  ForgeCommentsData,
+  ForgeListData,
+  ForgePrDiffResult,
+  ForgeRefStatusData,
+  ForgeSearchData,
+} from './forge/types.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
 import { agentCliRunner, detectOpenTargets, openFileInDefaultApp, openInApp } from './open-in-app.ts';
@@ -5257,6 +5269,17 @@ export function createApp(deps: ServerDeps) {
   };
   const prChangesParams = z.object({ number: z.coerce.number().int().positive().safe() });
   const prChangesQuery = z.object({ refresh: queryValue.refine((v) => v === undefined || v === '1') });
+  /**
+   * This family's driver. Every route below reads through `ForgeDriver` rather than importing a
+   * `fetchGithub*`, so a second forge is a driver file and not eight route edits (GitLab spec
+   * Phase 1, step 3). The route SPELLING is unchanged and so are the payloads.
+   *
+   * `null` means this project's origin is not a forge cezar can read. That degrades in-payload,
+   * never as a 5xx and never as an empty success — the same contract the tab has always had for a
+   * missing `gh`; only the words differ, because now we can say so without spawning anything.
+   */
+  const readForge = async (repoRoot: string) => resolveReadForge(repoRoot, await getRepoInfo(repoRoot));
+  const NO_FORGE = 'this project’s origin is not a forge cezar can read';
   const githubRoutes = new Hono<ProjectApiEnv>()
     .get(
       '/github',
@@ -5267,7 +5290,14 @@ export function createApp(deps: ServerDeps) {
         const { root: repoRoot } = c.get('project');
         const query = c.req.valid('query');
         const limit = Number.parseInt(query.limit ?? '', 10);
-        return c.json(await fetchGithub(repoRoot, query.refresh === '1', Number.isFinite(limit) ? limit : 30));
+        const forge = await readForge(repoRoot);
+        if (!forge) {
+          const unavailable: ForgeListData = { available: false, reason: NO_FORGE, issues: [], prs: [] };
+          return c.json(unavailable);
+        }
+        return c.json(
+          await forge.listItems({ refresh: query.refresh === '1', limit: Number.isFinite(limit) ? limit : 30 }),
+        );
       },
     )
 
@@ -5278,8 +5308,15 @@ export function createApp(deps: ServerDeps) {
         number: c.req.param('number'),
       });
       if (!parsed.success) return c.json({ error: 'invalid kind or number' }, 400);
+      const forge = await readForge(repoRoot);
+      if (!forge) {
+        const unavailable: ForgeCommentsData = { available: false, reason: NO_FORGE, comments: [] };
+        return c.json(unavailable);
+      }
       return c.json(
-        await fetchGithubComments(repoRoot, parsed.data.kind, parsed.data.number, c.req.valid('query').refresh === '1'),
+        await forge.comments(parsed.data.kind, parsed.data.number, {
+          refresh: c.req.valid('query').refresh === '1',
+        }),
       );
     })
 
@@ -5301,7 +5338,12 @@ export function createApp(deps: ServerDeps) {
         if (!Number.isInteger(n) || n <= 0 || String(n) !== part) return c.json({ error: 'invalid prs query' }, 400);
         numbers.push(n);
       }
-      return c.json(await fetchGithubChecks(repoRoot, numbers));
+      const forge = await readForge(repoRoot);
+      if (!forge) {
+        const unavailable: ForgeChecksData = { available: false, reason: NO_FORGE };
+        return c.json(unavailable);
+      }
+      return c.json(await forge.prChecks(numbers));
     })
 
     // Search across ALL states (#730). Additive sibling of `/github`, which lists the OPEN set
@@ -5322,7 +5364,18 @@ export function createApp(deps: ServerDeps) {
       async (c) => {
         const { root: repoRoot } = c.get('project');
         const { kind, q, limit } = c.req.valid('query');
-        return c.json(await searchGithubItems(repoRoot, kind, q, limit));
+        const forge = await readForge(repoRoot);
+        // `searchItems` is optional on the seam — a driver without it simply has no search
+        // fallback, and the tab keeps its in-memory filter over the open set.
+        if (!forge?.searchItems) {
+          const unavailable: ForgeSearchData = {
+            available: false,
+            reason: forge ? 'search is unavailable for this forge' : NO_FORGE,
+            items: [],
+          };
+          return c.json(unavailable);
+        }
+        return c.json(await forge.searchItems(kind, q, { limit }));
       },
     )
 
@@ -5343,7 +5396,12 @@ export function createApp(deps: ServerDeps) {
         if (parsedPrs.length === 0 && parsedIssues.length === 0) {
           return c.json({ error: 'missing prs or issues query' }, 400);
         }
-        return c.json(await fetchGithubRefStatus(repoRoot, { prs: parsedPrs, issues: parsedIssues }));
+        const forge = await readForge(repoRoot);
+        if (!forge) {
+          const unavailable: ForgeRefStatusData = { available: false, reason: NO_FORGE, recheckAfterMs: null };
+          return c.json(unavailable);
+        }
+        return c.json(await forge.refStatus({ prs: parsedPrs, issues: parsedIssues }));
       },
     )
 
@@ -5401,10 +5459,18 @@ export function createApp(deps: ServerDeps) {
       async (c) => {
         const { root: repoRoot } = c.get('project');
         const parsed = { data: c.req.valid('param') };
+        const forge = await readForge(repoRoot);
+        // `prDiff` is optional on the seam; a driver without it has no diff tier and the route
+        // says so rather than pretending the pull request has no files.
+        if (!forge?.prDiff) {
+          const unavailable: ForgePrDiffResult = {
+            available: false,
+            reason: forge ? 'pull request diffs are unavailable for this forge' : NO_FORGE,
+          };
+          return c.json(unavailable);
+        }
         try {
-          return c.json(
-            await fetchGithubPrDiff(repoRoot, parsed.data.number, c.req.valid('query').refresh === '1'),
-          );
+          return c.json(await forge.prDiff(parsed.data.number, { refresh: c.req.valid('query').refresh === '1' }));
         } catch (err) {
           if (err instanceof GithubPrNotFoundError) return c.json({ error: err.message }, 404);
           throw err;

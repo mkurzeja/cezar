@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
-import { forgetRefStatus } from './github.ts';
+import { forgetRefStatus } from './forge/ref-status-cache.ts';
 import { createApp } from './server.ts';
 
 /**
@@ -23,8 +23,11 @@ import { createApp } from './server.ts';
  * Driven through `CEZ_DRY_RUN=1`, so no `gh` is touched: the assertion is that the routes CALL
  * the invalidation with the right reference, which is the part that can silently not happen.
  */
-vi.mock('./github.ts', async (importActual) => {
-  const actual = await importActual<typeof import('./github.ts')>();
+// Mocked where the cache LIVES, which is where the routes reach for it: the ref-status cache is a
+// module of its own precisely so a reader needs no driver and no project context
+// (`forge/ref-status-cache.ts`).
+vi.mock('./forge/ref-status-cache.ts', async (importActual) => {
+  const actual = await importActual<typeof import('./forge/ref-status-cache.ts')>();
   return { ...actual, forgetRefStatus: vi.fn(actual.forgetRefStatus) };
 });
 
