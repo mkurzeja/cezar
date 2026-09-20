@@ -7,10 +7,13 @@ import type {
   DraftPrInput,
   DraftPrOutcome,
   ForgeAvailability,
+  ForgeChecksData,
+  ForgeChecksGlyph,
   ForgeComment,
   ForgeCommentsData,
   ForgeDriver,
   ForgeItem,
+  ForgeListData,
   ForgeMergeInput,
   ForgeMergeMethod,
   ForgeMergeResult,
@@ -20,9 +23,14 @@ import type {
   ForgePrStatus,
   ForgePrDiffResult,
   ForgeRefKind,
+  ForgeRefStatusData,
+  ForgeRefStatusInput,
   ForgeSearchData,
   ForgeTimelineEvent,
   ForgeTimelineEventKind,
+  Mergeability,
+  ReferenceStatus,
+  ResolvedReference,
 } from './types.ts';
 
 /**
@@ -171,19 +179,9 @@ function mockGithubPrDiff(number: number): ForgePrDiffResult {
 /** One GitHub issue or pull request, flattened for the cockpit's GitHub tab. */
 export type GithubItem = ForgeItem;
 
-export interface GithubData {
-  available: boolean;
-  /** Human-readable hint when unavailable (`gh` missing, no remote, offline…). */
-  reason?: string;
-  /** owner/name, when known. */
-  repo?: string;
-  syncedAt?: string;
-  issues: GithubItem[];
-  prs: GithubItem[];
-  /** Repo-wide map of label name → 6-hex color (no `#`), so the UI can tint chips like GitHub
-   *  does. Additive (BACKWARD_COMPATIBILITY): absent on old payloads, chips fall back to neutral. */
-  labelColors?: Record<string, string>;
-}
+/** The `/api/github` list payload. An alias, not a second declaration: the shape is the seam's
+ *  (`ForgeListData`), and this name is what every existing importer already says. */
+export type GithubData = ForgeListData;
 
 // `gh … --json` output — validated at the boundary, extras stripped.
 const ghAuthor = z.object({ login: z.string() }).nullish();
@@ -1173,11 +1171,9 @@ export async function fetchCommitChecks(
 // subprocess, and any failure degrades to absent glyphs rather than failing the tab.
 
 /** The single enum a PR row's checks glyph renders (never `undefined` on the wire). */
-export type ChecksGlyph = 'passing' | 'failing' | 'pending' | null;
+export type ChecksGlyph = ForgeChecksGlyph;
 
-export type GithubChecksData =
-  | { available: true; checks: Record<number, ChecksGlyph> }
-  | { available: false; reason: string };
+export type GithubChecksData = ForgeChecksData;
 
 /** PR numbers per checks query. Aliases resolve independently (a failed chunk costs only its own
  *  glyphs); bounded so an unbounded number list can't blow the query size limit. Also the route's
@@ -1333,35 +1329,9 @@ function mockGithubChecks(numbers: number[]): GithubChecksData {
 // Deliberately NOT `prMergeState`: that answers "may I press Merge on THIS one" and costs a
 // request (plus a merge-policy lookup) per PR. A table needs a glyph per row, not a merge gate.
 
-/** Where a referenced PR or issue stands. Mirrored by `referenceStatusSchema` in the contract —
- *  see there for why PR `closed` and issue `completed` are separate words. */
-export type ReferenceStatus =
-  | 'draft'
-  | 'review-required'
-  | 'changes-requested'
-  | 'checks-pending'
-  | 'checks-failing'
-  | 'ready'
-  | 'merged'
-  | 'closed'
-  | 'open'
-  | 'completed'
-  | 'not-planned';
+export type { ReferenceStatus };
 
-export type GithubRefStatusData =
-  | {
-      available: true;
-      prs: Record<number, ReferenceStatus>;
-      issues: Record<number, ReferenceStatus>;
-      /** The OPEN pull requests among them that do not merge into their base — the second axis,
-       *  never folded into a status. Optional on the wire, and absent means "nothing is known"
-       *  rather than "no conflicts"; see `conflicts` in the contract. */
-      conflicts?: number[];
-      /** When to ask again, or `null` when nothing here can change. See `recheckAfterMs` in the
-       *  contract for why the SERVER answers this. */
-      recheckAfterMs: number | null;
-    }
-  | { available: false; reason: string; recheckAfterMs: number | null };
+export type GithubRefStatusData = ForgeRefStatusData;
 
 /** Numbers per kind in one ref-status query — the same bound, and for the same reasons, as
  *  `GH_CHECKS_MAX`: aliases resolve independently, and the query size stays finite. Taken from the
@@ -1631,24 +1601,10 @@ export function derivePrReferenceStatus(pr: {
   return 'ready';
 }
 
-/**
- * Whether this pull request's branch merges into its base — the OTHER axis, kept out of
- * `derivePrReferenceStatus` on purpose (see `conflicts` in the contract).
- *
- * Three values, and the third is the one that matters. GitHub does not store mergeability; it
- * COMPUTES it when asked, and answers `UNKNOWN` while the background job runs — which is the
- * normal answer for the first seconds after every push, and therefore for exactly the moment a
- * cockpit is most likely to be looking. `UNKNOWN` means *we were not told*, never *it is clean*,
- * and the caller must be able to tell those apart: it is what decides how soon to ask again
- * (`refStatusTtl`), and answering it as "not conflicting" with a one-minute TTL is precisely how a
- * conflicting pull request came to sit there wearing "Ready to merge".
- *
- * `undefined` for anything the question does not apply to: an issue, and a merged or closed pull
- * request (GitHub says `UNKNOWN` for those too, forever, and a terminal PR has no conflict left to
- * resolve — a merged PR wearing a conflict chip is a lie the state alone rules out).
- */
-export type Mergeability = 'mergeable' | 'conflicting' | 'unknown';
+export type { Mergeability };
 
+/** GitHub's `mergeable` field, read as the tri-state the seam defines — see `Mergeability` in
+ *  `types.ts` for why `unknown` must survive as a value rather than collapse into "clean". */
 export function mergeabilityOf(state: string, mergeable: string | null | undefined): Mergeability | undefined {
   if (state.toUpperCase() !== 'OPEN') return undefined;
   switch (mergeable?.toUpperCase()) {
@@ -1687,16 +1643,7 @@ export function deriveIssueReferenceStatus(issue: {
 
 /** What one number turned out to be, and where it stands. `kind` is the forge's answer, not the
  *  caller's guess — see `refStatusQuery`. */
-export interface ResolvedReference {
-  kind: 'pr' | 'issue';
-  status: ReferenceStatus;
-  /** Where this pull request stands on the OTHER axis, or absent when the question does not
-   *  apply (an issue, a merged or closed PR). Deliberately not folded into `status`; see
-   *  `mergeabilityOf`, and `conflicts` in the contract. `unknown` is kept as a value rather than
-   *  collapsed into "not conflicting", because it is the difference between an answer and a
-   *  question GitHub has not finished answering. */
-  mergeable?: Mergeability;
-}
+export type { ResolvedReference };
 
 /**
  * The outcome of one batched lookup. `failed` is what separates *this number is not in the
@@ -2898,6 +2845,18 @@ export function createGithubDriver(repoRoot: string, repoRef: GithubRepoRef | nu
     listIssues: async (opts) => (await fetchGithub(repoRoot, opts?.refresh, opts?.limit)).issues,
 
     listPRs: async (opts) => (await fetchGithub(repoRoot, opts?.refresh, opts?.limit)).prs,
+
+    // The read tier, promoted onto the seam (GitLab spec Phase 1): each of these is the whole of
+    // what one `/api/v1/github/*` route answers, so a route needs a driver and nothing else. The
+    // functions below are unchanged and still exported — the tests and the `server/github.ts`
+    // delegate address them directly — but the ROUTES now come through here.
+    listItems: (opts) => fetchGithub(repoRoot, opts?.refresh, opts?.limit),
+
+    comments: (kind, number, opts) => fetchGithubComments(repoRoot, kind, number, opts?.refresh),
+
+    prChecks: (numbers) => fetchGithubChecks(repoRoot, numbers),
+
+    refStatus: (input) => fetchGithubRefStatus(repoRoot, input),
 
     // The open-only list tier's escape hatch (#730) — this is the only path that can reach a
     // closed or merged item.

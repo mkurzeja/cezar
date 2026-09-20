@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { RepoInfo } from '../git.ts';
 import { forgeKindOfRemote, parseRemote, resolveForge } from './index.ts';
+import { __clearRefStatusCacheForTests } from './github.ts';
 
 /** Forge resolution (spec §"Forge-driver seam"): remote host → driver | null. */
 
@@ -74,6 +75,66 @@ describe('resolveForge', () => {
 
   it('returns null for a local-path remote', () => {
     expect(resolveForge(info('/srv/git/demo.git'))).toBeNull();
+  });
+});
+
+/**
+ * The read tier on the seam (GitLab spec Phase 1, step 1). Four methods the interface now NAMES,
+ * so a route can be served by "whatever driver this project resolved to" instead of by a
+ * `fetchGithub*` import that only one forge can ever satisfy.
+ *
+ * Driven through `CEZ_DRY_RUN=1`: what is under test is that the driver delegates each method to
+ * the function that already implemented it, not the `gh` shelling those functions do — that has
+ * its own suite in `github.test.ts`.
+ */
+describe('GitHub driver read tier', () => {
+  const previousDryRun = process.env.CEZ_DRY_RUN;
+  const driver = () => resolveForge(info('git@github.com:acme/demo.git'))!;
+
+  beforeAll(() => {
+    process.env.CEZ_DRY_RUN = '1';
+  });
+
+  afterAll(() => {
+    if (previousDryRun === undefined) delete process.env.CEZ_DRY_RUN;
+    else process.env.CEZ_DRY_RUN = previousDryRun;
+    __clearRefStatusCacheForTests();
+  });
+
+  it('answers the whole list payload, not just the two item arrays', async () => {
+    const data = await driver().listItems();
+    expect(data.available).toBe(true);
+    expect(data.issues.length).toBeGreaterThan(0);
+    expect(data.prs.length).toBeGreaterThan(0);
+    // The fields an `issues`/`prs` pair structurally cannot carry, which is why `listItems` is not
+    // `listIssues` + `listPRs`.
+    expect(data).toHaveProperty('repo');
+    expect(data).toHaveProperty('labelColors');
+  });
+
+  it('answers a comment thread for either kind', async () => {
+    for (const kind of ['issue', 'pr'] as const) {
+      const thread = await driver().comments(kind, 128);
+      expect(thread.available).toBe(true);
+      expect(Array.isArray(thread.comments)).toBe(true);
+    }
+  });
+
+  it('answers a glyph per requested PR number', async () => {
+    const checks = await driver().prChecks([128, 124]);
+    expect(checks.available).toBe(true);
+    if (!checks.available) throw new Error('expected available');
+    expect(checks.checks[128]).toBe('passing');
+    expect(checks.checks[124]).toBe('failing');
+  });
+
+  it('answers batched reference status filed by what each number turned out to be', async () => {
+    const status = await driver().refStatus({ prs: [128], issues: [142] });
+    expect(status.available).toBe(true);
+    if (!status.available) throw new Error('expected available');
+    expect(status.prs[128]).toBeDefined();
+    expect(status.issues[142]).toBeDefined();
+    expect(status).toHaveProperty('recheckAfterMs');
   });
 });
 
