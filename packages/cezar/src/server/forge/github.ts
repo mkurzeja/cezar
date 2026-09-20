@@ -1850,7 +1850,7 @@ function hasResolvedRepository(stdout: string): boolean {
  */
 export async function fetchGithubRefStatus(
   repoRoot: string,
-  input: { prs?: number[]; issues?: number[] },
+  input: ForgeRefStatusInput,
 ): Promise<GithubRefStatusData> {
   const asPrs = sanitizeRefNumbers(input.prs);
   const asIssues = sanitizeRefNumbers(input.issues);

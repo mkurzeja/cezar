@@ -177,7 +177,16 @@ export function peekRefStatusUnknownSince(repoRoot: string, number: number): num
 /** Record what the forge just answered, and keep the map bounded. `at` is the caller's, not
  *  `Date.now()`: an answer must be dated when it ARRIVED, and dating it by when the request was
  *  assembled would age a slow query's results by its own duration — shortening the TTL of exactly
- *  the answers that cost the most to get. */
+ *  the answers that cost the most to get.
+ *
+ *  Note the eviction order is **first insert**, not least-recently-used: re-answering an existing
+ *  number `set`s its key in place, which in a JS Map does not move it to the newest position, so a
+ *  reference refreshed every minute is still evicted before one written once and never read. That
+ *  is carried over from where this cache used to live, deliberately and not as an improvement —
+ *  `listCache` and `detectCache` in `github.ts` do `delete` then `set` precisely to get LRU, and
+ *  this one never did. It matters little at 500 entries against a per-batch cap of 100, and an
+ *  evicted entry costs one query, not a wrong answer. Changing it is a behaviour change; make it
+ *  on purpose, not while passing through. */
 export function storeRefStatus(repoRoot: string, number: number, entry: RefStatusEntry): void {
   refStatusCache.set(refStatusKey(repoRoot, number), {
     at: entry.at,
