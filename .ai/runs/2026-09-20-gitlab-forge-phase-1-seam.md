@@ -100,8 +100,8 @@ remote-less checkout.
 
 ### Phase 3: Repoint the eight routes
 
-- [ ] 3.1 Add `resolveReadForge` and repoint the six directly-importing routes onto driver methods
-- [ ] 3.2 Repoint server.ts's cache helpers at the extracted module and drop the dead imports
+- [x] 3.1 Add `resolveReadForge` and repoint the six directly-importing routes onto driver methods — 877b0bda
+- [x] 3.2 Repoint server.ts's cache helpers at the extracted module and drop the dead imports — 877b0bda
 
 ### Phase 4: Validation
 
