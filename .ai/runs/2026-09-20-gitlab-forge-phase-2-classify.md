@@ -178,5 +178,5 @@ PR: #3
 
 ### Phase 6: Validation
 
-- [ ] 6.1 Full validation gate green
+- [x] 6.1 Full validation gate green — `npm run typecheck` ✅ · `npm test` ✅ 393 files / 7336 tests / 0 failures · `npm run test:unit` ✅ 36/36 · `npm run build` ✅ (`check:pack ok — 539 files`) · `npm run test:package` ✅ 16/16
 - [ ] 6.2 Authoritative review pass applied
