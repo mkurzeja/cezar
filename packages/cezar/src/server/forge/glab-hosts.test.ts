@@ -77,7 +77,7 @@ describe('glab hosts discovery', () => {
     it('unions the per-repo .git/glab-cli config rather than letting it terminate the walk', () => {
       write(join(dir, 'home/.config/glab-cli/config.yml'), config('global.example.com'));
       write(join(dir, 'repo/.git/glab-cli/config.yml'), config('repo.example.com'));
-      expect(knownGlabHosts({ env: env(), repoRoot: join(dir, 'repo') }).sort()).toEqual([
+      expect([...knownGlabHosts({ env: env(), repoRoot: join(dir, 'repo') })].sort()).toEqual([
         'global.example.com',
         'repo.example.com',
       ]);
@@ -128,7 +128,7 @@ describe('glab hosts discovery', () => {
       write(join(dir, 'home/.config/glab-cli/config.yml'), config('git.acme.internal', 'gitlab.example.com'));
       const hosts = knownGlabHosts({ env: env() });
 
-      expect(hosts.sort()).toEqual(['git.acme.internal', 'gitlab.example.com']);
+      expect([...hosts].sort()).toEqual(['git.acme.internal', 'gitlab.example.com']);
       // Not a redaction check — a shape check. Every element is a string that is a hostname, so
       // there is no field a token could ride in even if the loader grew one.
       expect(JSON.stringify(hosts)).not.toContain(TOKEN);
@@ -148,7 +148,7 @@ describe('glab hosts discovery', () => {
         join(dir, 'home/.config/glab-cli/config.yml'),
         config('GitLab.Example.COM', 'https://git.acme.internal/', 'ports.example.com:8443'),
       );
-      expect(knownGlabHosts({ env: env() }).sort()).toEqual([
+      expect([...knownGlabHosts({ env: env() })].sort()).toEqual([
         'git.acme.internal',
         'gitlab.example.com',
         'ports.example.com:8443',

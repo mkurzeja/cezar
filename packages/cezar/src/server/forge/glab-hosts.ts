@@ -26,7 +26,7 @@ import { parse as parseYaml } from 'yaml';
  *
  * ## Cost
  *
- * `forgeKindOfRemote` is documented as "plain string parsing, no `gh` shell-out" — the registry
+ * `classifyRemote` is documented as "plain string parsing, no `gh` shell-out" — the registry
  * probe runs it per project. This must not regress that into a subprocess, so it is a file read
  * and a YAML parse, never `glab auth status`. The parse is cached and invalidated on mtime, so the
  * steady-state cost is one `stat` per candidate path.
