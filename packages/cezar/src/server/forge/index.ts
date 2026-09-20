@@ -12,6 +12,23 @@ import type { ForgeDriver, ForgeKind } from './types.ts';
 
 export interface ParsedRemote {
   host: string;
+  /**
+   * The WHOLE project path — `owner/repo` on GitHub, `group/subgroup/project` on a GitLab that
+   * nests (GitLab spec Architecture §2). This is what every URL is built from.
+   *
+   * It exists because `owner`/`repo` below cannot express a nested path and silently truncate it:
+   * `gitlab.com/group/subgroup/project` used to yield `owner: 'subgroup'`, dropping `group/`. That
+   * was latent while GitLab hosts classified as "no forge" — nothing was ever built from the
+   * mangled parts — and the phase that classifies them is the phase that would otherwise start
+   * rendering `https://gitlab.com/subgroup/project`, which 404s. Subgroups are ubiquitous on
+   * self-hosted GitLab, so the two changes belong together.
+   */
+  projectPath: string;
+  /**
+   * The last two path segments, unchanged and deliberately so: they are what the GitHub driver
+   * passes to `gh --repo owner/repo`, where a path is exactly two segments and these are correct.
+   * Prefer `projectPath` for anything URL-shaped.
+   */
   owner: string;
   repo: string;
 }
@@ -41,7 +58,7 @@ export function parseRemote(remote: string): ParsedRemote | null {
   const owner = parts[parts.length - 2];
   const repo = parts[parts.length - 1];
   if (!owner || !repo) return null;
-  return { host: host.toLowerCase(), owner, repo };
+  return { host: host.toLowerCase(), projectPath: parts.join('/'), owner, repo };
 }
 
 /** Remote host → forge kind. The one host table both `resolveForge` and the
@@ -60,17 +77,21 @@ export function forgeKindOfRemote(remote: string | undefined): ForgeKind | null 
 }
 
 /**
- * A remote's web root — `https://github.com/owner/repo` — or null for anything not on a known
- * forge host.
+ * A remote's web root — `https://github.com/owner/repo`, or `https://git.acme.internal/group/sub/p`
+ * on a GitLab that nests — or null for anything not on a forge cezar recognizes.
  *
  * Built from the PARSED remote, never by string-editing the raw one, and that is the point: a
  * remote may carry credentials (`https://user:token@github.com/o/r.git`), and this is a value the
- * cockpit renders and links to. Rebuilding it from `{host, owner, repo}` leaves nothing to leak.
+ * cockpit renders and links to. Rebuilding it from `{host, projectPath}` leaves nothing to leak.
+ *
+ * `projectPath` rather than `owner/repo`: for every real github.com remote the two are the same
+ * string (a GitHub path is exactly two segments), and for a subgroup-nested GitLab project only
+ * the former is a URL that resolves.
  */
 export function forgeWebRoot(remote: string | undefined): string | null {
   const parsed = remote ? parseRemote(remote) : null;
   if (!parsed || !(parsed.host in FORGE_HOSTS)) return null;
-  return `https://${parsed.host}/${parsed.owner}/${parsed.repo}`;
+  return `https://${parsed.host}/${parsed.projectPath}`;
 }
 
 /** Remote host → driver | null. GitLab lands here later as one more case. */

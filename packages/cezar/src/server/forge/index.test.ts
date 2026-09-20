@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { RepoInfo } from '../git.ts';
-import { forgeKindOfRemote, parseRemote, resolveForge } from './index.ts';
+import { forgeKindOfRemote, forgeWebRoot, parseRemote, resolveForge, type ParsedRemote } from './index.ts';
 import { __clearRefStatusCacheForTests } from './github.ts';
 
 /** Forge resolution (spec §"Forge-driver seam"): remote host → driver | null. */
@@ -8,18 +8,53 @@ import { __clearRefStatusCacheForTests } from './github.ts';
 const info = (remote?: string): RepoInfo => ({ root: '/repo', branch: 'main', remote });
 
 describe('parseRemote', () => {
+  const gh = (extra: Partial<ParsedRemote> = {}): ParsedRemote => ({
+    host: 'github.com',
+    projectPath: 'acme/demo',
+    owner: 'acme',
+    repo: 'demo',
+    ...extra,
+  });
+
   it.each([
-    ['https://github.com/acme/demo.git', { host: 'github.com', owner: 'acme', repo: 'demo' }],
-    ['https://github.com/acme/demo', { host: 'github.com', owner: 'acme', repo: 'demo' }],
-    ['https://user:token@github.com/acme/demo.git', { host: 'github.com', owner: 'acme', repo: 'demo' }],
-    ['git@github.com:acme/demo.git', { host: 'github.com', owner: 'acme', repo: 'demo' }],
-    ['ssh://git@github.com/acme/demo.git', { host: 'github.com', owner: 'acme', repo: 'demo' }],
-    ['ssh://git@github.com:2222/acme/demo.git', { host: 'github.com', owner: 'acme', repo: 'demo' }],
-    ['git://github.com/acme/demo.git', { host: 'github.com', owner: 'acme', repo: 'demo' }],
-    ['https://GitHub.com/acme/demo.git', { host: 'github.com', owner: 'acme', repo: 'demo' }],
-    ['https://github.com/acme/demo/', { host: 'github.com', owner: 'acme', repo: 'demo' }],
-    ['git@gitlab.com:group/sub/project.git', { host: 'gitlab.com', owner: 'sub', repo: 'project' }],
+    ['https://github.com/acme/demo.git', gh()],
+    ['https://github.com/acme/demo', gh()],
+    ['https://user:token@github.com/acme/demo.git', gh()],
+    ['git@github.com:acme/demo.git', gh()],
+    ['ssh://git@github.com/acme/demo.git', gh()],
+    ['ssh://git@github.com:2222/acme/demo.git', gh()],
+    ['git://github.com/acme/demo.git', gh()],
+    ['https://GitHub.com/acme/demo.git', gh()],
+    ['https://github.com/acme/demo/', gh()],
   ])('parses %s', (remote, expected) => {
+    expect(parseRemote(remote)).toEqual(expected);
+  });
+
+  /**
+   * The subgroup half (GitLab spec Architecture §2). `owner`/`repo` stay the LAST TWO segments —
+   * byte-identical to what they have always been, because the GitHub driver passes them to
+   * `gh --repo` — and `projectPath` is the whole path, which is the only thing a nested GitLab
+   * URL can be built from. Three levels because GitLab nests arbitrarily and two-deep would pass
+   * against a `parts.slice(-3)` that is still wrong.
+   */
+  it.each([
+    [
+      'https://gitlab.com/group/subgroup/project.git',
+      { host: 'gitlab.com', projectPath: 'group/subgroup/project', owner: 'subgroup', repo: 'project' },
+    ],
+    [
+      'git@gitlab.com:group/sub/project.git',
+      { host: 'gitlab.com', projectPath: 'group/sub/project', owner: 'sub', repo: 'project' },
+    ],
+    [
+      'ssh://git@gitlab.example.com:2222/grp/a/b/proj.git',
+      { host: 'gitlab.example.com', projectPath: 'grp/a/b/proj', owner: 'b', repo: 'proj' },
+    ],
+    [
+      'https://oauth2:glpat-xxx@git.acme.internal/team/platform/cezar.git',
+      { host: 'git.acme.internal', projectPath: 'team/platform/cezar', owner: 'platform', repo: 'cezar' },
+    ],
+  ])('keeps the whole path of %s', (remote, expected) => {
     expect(parseRemote(remote)).toEqual(expected);
   });
 
@@ -30,6 +65,16 @@ describe('parseRemote', () => {
     [''],
   ])('rejects %s', (remote) => {
     expect(parseRemote(remote)).toBeNull();
+  });
+});
+
+describe('forgeWebRoot', () => {
+  it('rebuilds a github.com root exactly as it always did', () => {
+    expect(forgeWebRoot('https://tok3n:x@github.com/acme/demo.git')).toBe('https://github.com/acme/demo');
+  });
+
+  it('is null for a host no forge claims', () => {
+    expect(forgeWebRoot('https://git.example.com/acme/demo.git')).toBeNull();
   });
 });
 
