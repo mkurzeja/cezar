@@ -370,6 +370,41 @@ describe('taskReferences', () => {
   it('is empty when the task references nothing', () => {
     expect(taskReferences(run())).toEqual([])
   })
+
+  // Spec 2026-09-20-gitlab-forge-support §Identifiers. Phase 2 starts serving `repoUrl` +
+  // `forge: 'gitlab'` for a GitLab project, which turns every number-only chip on such a project
+  // into a real link for the first time — so the spelling has to be right before that lands.
+  // `/pull/N` has never existed on GitLab: it is a hard 404, not a redirect to the MR.
+  it('spells a GitLab project’s synthesized links the way GitLab spells them', () => {
+    const GL = 'https://gitlab.example.com/group/subgroup/project'
+    expect(taskReferences(run({ prNumber: 42, issueNumber: 12 }), GL, 'gitlab')).toEqual([
+      { kind: 'PR', number: 42, url: `${GL}/-/merge_requests/42` },
+      { kind: 'Issue', number: 12, url: `${GL}/-/issues/12` },
+    ])
+  })
+
+  it('spells GitHub’s shapes for an ABSENT forge, exactly as before it was told them apart', () => {
+    // The fail-open default, pinned: a registry row written by a cezar older than the classifier
+    // carries a `repoUrl` and no `forge`, and a github.com user must see byte-identical URLs.
+    const refs = taskReferences(run({ prNumber: 42, issueNumber: 12 }), REPO, undefined)
+    expect(refs).toEqual(taskReferences(run({ prNumber: 42, issueNumber: 12 }), REPO, 'github'))
+    expect(refs.map((reference) => reference.url)).toEqual([
+      `${REPO}/pull/42`,
+      `${REPO}/issues/12`,
+    ])
+  })
+
+  it('never re-spells a URL it was given — only ones it builds', () => {
+    // A discovered URL is the truth even on a GitLab project: the forge only decides how a bare
+    // NUMBER becomes a link, and re-writing a scraped link would be inventing one.
+    expect(
+      taskReferences(
+        run({ pullRequestUrl: 'https://github.com/o/r/pull/9' }),
+        'https://gitlab.example.com/o/r',
+        'gitlab',
+      ),
+    ).toEqual([{ kind: 'PR', number: 9, url: 'https://github.com/o/r/pull/9' }])
+  })
 })
 
 describe('taskIssueUrl', () => {
@@ -417,6 +452,16 @@ describe('taskIssueUrl', () => {
       referencedPrCandidates: ['https://github.com/other/repo/pull/1'],
     })
     expect(taskIssueUrl(r, 'https://github.com/elsewhere/x')).toBe('https://github.com/o/r/issues/524')
+  })
+
+  it('synthesizes a GitLab issue under `/-/issues/` (spec 2026-09-20-gitlab-forge-support)', () => {
+    const r = run({ markerRefs: { issue: 524 } })
+    const GL = 'https://gitlab.example.com/group/subgroup/project'
+    expect(taskIssueUrl(r, GL, 'gitlab')).toBe(`${GL}/-/issues/524`)
+    // …and the default case, which is the one that must not move: no forge spells GitHub, the
+    // shape every caller that predates this parameter still gets.
+    expect(taskIssueUrl(r, 'https://github.com/o/r')).toBe('https://github.com/o/r/issues/524')
+    expect(taskIssueUrl(r, 'https://github.com/o/r', 'github')).toBe('https://github.com/o/r/issues/524')
   })
 })
 

@@ -2,7 +2,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH } from '@open-mercato/cezar-contract';
-import { forgeKindOfRemote, forgeWebRoot, type ForgeKind } from '../server/forge/index.ts';
+import { classifyRemote, forgeWebRoot, type ForgeKind } from '../server/forge/index.ts';
 import { getRepoInfo } from '../server/git.ts';
 import {
   mergeWriteWorkspaceConfig,
@@ -281,9 +281,13 @@ async function computeProbe(root: string): Promise<RootProbe> {
   // Branch and forge are best-effort garnish: getRepoInfo never throws (null
   // on e.g. an unborn HEAD), and a repo without either is still status ok.
   const info = await getRepoInfo(root);
-  const forge = forgeKindOfRemote(info?.remote);
-  // Free: `getRepoInfo` already ran for the branch, and the remote is already parsed for `forge`.
-  const repoUrl = forgeWebRoot(info?.remote);
+  // `root` lets the classifier see a per-repo `.git/glab-cli/config.yml` — a self-hosted GitLab
+  // the user authenticated for THIS checkout only still classifies.
+  const forge = classifyRemote(info?.remote, root);
+  // Cheap rather than free: `getRepoInfo` already ran for the branch, and a github.com/gitlab.com
+  // remote classifies off the static table without touching the filesystem — but this does parse
+  // the remote a second time, which the probe's own TTL cache is what keeps off the hot path.
+  const repoUrl = forgeWebRoot(info?.remote, root);
   return {
     status: 'ok',
     ...(info?.branch ? { branch: info.branch } : {}),

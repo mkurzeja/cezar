@@ -1,5 +1,6 @@
 import type { RepoInfo } from '../git.ts';
 import { createGithubDriver } from './github.ts';
+import { knownGlabHosts } from './glab-hosts.ts';
 import type { ForgeDriver, ForgeKind } from './types.ts';
 
 /**
@@ -12,6 +13,23 @@ import type { ForgeDriver, ForgeKind } from './types.ts';
 
 export interface ParsedRemote {
   host: string;
+  /**
+   * The WHOLE project path — `owner/repo` on GitHub, `group/subgroup/project` on a GitLab that
+   * nests (GitLab spec Architecture §2). This is what every URL is built from.
+   *
+   * It exists because `owner`/`repo` below cannot express a nested path and silently truncate it:
+   * `gitlab.com/group/subgroup/project` used to yield `owner: 'subgroup'`, dropping `group/`. That
+   * was latent while GitLab hosts classified as "no forge" — nothing was ever built from the
+   * mangled parts — and the phase that classifies them is the phase that would otherwise start
+   * rendering `https://gitlab.com/subgroup/project`, which 404s. Subgroups are ubiquitous on
+   * self-hosted GitLab, so the two changes belong together.
+   */
+  projectPath: string;
+  /**
+   * The last two path segments, unchanged and deliberately so: they are what the GitHub driver
+   * passes to `gh --repo owner/repo`, where a path is exactly two segments and these are correct.
+   * Prefer `projectPath` for anything URL-shaped.
+   */
   owner: string;
   repo: string;
 }
@@ -41,44 +59,83 @@ export function parseRemote(remote: string): ParsedRemote | null {
   const owner = parts[parts.length - 2];
   const repo = parts[parts.length - 1];
   if (!owner || !repo) return null;
-  return { host: host.toLowerCase(), owner, repo };
+  return { host: host.toLowerCase(), projectPath: parts.join('/'), owner, repo };
 }
 
-/** Remote host → forge kind. The one host table both `resolveForge` and the
- *  registry probe read; GitLab lands here later as one more row. */
-const FORGE_HOSTS: Record<string, ForgeKind> = { 'github.com': 'github' };
+/** The hosts every cezar knows without being told. Two SaaS forges and nothing else: a
+ *  self-hosted instance cannot be enumerated, which is what `classifyRemote` exists to handle. */
+const FORGE_HOSTS: Record<string, ForgeKind> = { 'github.com': 'github', 'gitlab.com': 'gitlab' };
 
 /**
- * Which forge a remote URL belongs to, without building a driver (#698): the
- * registry's per-project probe classifies each root from its remote alone —
- * plain string parsing, no `gh` shell-out — so the sidebar can gate each
- * project's GitHub tab on the project's own remote.
+ * Which forge a remote URL belongs to, without building a driver (#698): the static table above,
+ * ∪ the GitLab instances `glab` is already authenticated against (GitLab spec Architecture §1).
+ *
+ * The union is the whole design. A host table can classify `github.com` and `gitlab.com` forever,
+ * and can never classify `git.acme.internal` — which is precisely the deployment a local-first,
+ * no-account cockpit is most attractive to. So the second half is DISCOVERED from glab's own
+ * config rather than configured (see `glab-hosts.ts`, which also documents why it never reads a
+ * value out of that file). The static table wins, so a `glab` that somehow listed `github.com`
+ * cannot reclassify it.
+ *
+ * This is what the registry's per-project probe runs against every root, so the sidebar can gate
+ * each project's forge tab on that project's own remote — and it is documented there as costing no
+ * `gh` shell-out. It still costs none: the discovered half is a file read and a YAML parse,
+ * mtime-cached, never `glab auth status`.
+ *
+ * `repoRoot` is optional and only widens what can be found — glab layers a per-repo config on top
+ * of the global one. Callers that have a root in hand pass it; the rest lose nothing they had.
+ *
+ * (Named `forgeKindOfRemote` until this phase. One authority, one name: the spec calls it
+ * `classifyRemote` because it is no longer a table lookup.)
  */
-export function forgeKindOfRemote(remote: string | undefined): ForgeKind | null {
+export function classifyRemote(remote: string | undefined, repoRoot?: string): ForgeKind | null {
   const parsed = remote ? parseRemote(remote) : null;
-  return parsed ? (FORGE_HOSTS[parsed.host] ?? null) : null;
+  return parsed ? classifyParsed(parsed, repoRoot) : null;
+}
+
+/** The classification itself, off an already-parsed remote. Exists so the callers below — each of
+ *  which has the parse in hand — do not pay for a second one, and so the registry probe's "the
+ *  remote is already parsed" comment stays true. */
+function classifyParsed(parsed: ParsedRemote, repoRoot?: string): ForgeKind | null {
+  const known = FORGE_HOSTS[parsed.host];
+  // The static table short-circuits, so a github.com or gitlab.com project never touches the
+  // filesystem here at all — only an unrecognized host pays the glab-config lookup.
+  if (known) return known;
+  return knownGlabHosts({ repoRoot }).includes(parsed.host) ? 'gitlab' : null;
 }
 
 /**
- * A remote's web root — `https://github.com/owner/repo` — or null for anything not on a known
- * forge host.
+ * A remote's web root — `https://github.com/owner/repo`, or `https://git.acme.internal/group/sub/p`
+ * on a GitLab that nests — or null for anything not on a forge cezar recognizes.
  *
  * Built from the PARSED remote, never by string-editing the raw one, and that is the point: a
  * remote may carry credentials (`https://user:token@github.com/o/r.git`), and this is a value the
- * cockpit renders and links to. Rebuilding it from `{host, owner, repo}` leaves nothing to leak.
+ * cockpit renders and links to. Rebuilding it from `{host, projectPath}` leaves nothing to leak.
+ *
+ * `projectPath` rather than `owner/repo`: for every real github.com remote the two are the same
+ * string (a GitHub path is exactly two segments), and for a subgroup-nested GitLab project only
+ * the former is a URL that resolves.
  */
-export function forgeWebRoot(remote: string | undefined): string | null {
+export function forgeWebRoot(remote: string | undefined, repoRoot?: string): string | null {
   const parsed = remote ? parseRemote(remote) : null;
-  if (!parsed || !(parsed.host in FORGE_HOSTS)) return null;
-  return `https://${parsed.host}/${parsed.owner}/${parsed.repo}`;
+  if (!parsed || classifyParsed(parsed, repoRoot) === null) return null;
+  return `https://${parsed.host}/${parsed.projectPath}`;
 }
 
-/** Remote host → driver | null. GitLab lands here later as one more case. */
+/**
+ * Remote → driver | null.
+ *
+ * A classified `'gitlab'` deliberately still answers `null` here: this phase teaches cezar to
+ * RECOGNIZE GitLab, and the driver that can talk to it lands in the next one (spec Phase 3,
+ * step 8). Until then a GitLab project reports `forge: 'gitlab'` in the registry — which is what
+ * makes its `repoUrl` correct — while `/health` reports `forge: null` and the tab stays hidden,
+ * because that field says which forge cezar can SERVE, not which one the remote is on.
+ */
 export function resolveForge(repoInfo: RepoInfo | null): ForgeDriver | null {
   if (!repoInfo?.remote) return null;
   const parsed = parseRemote(repoInfo.remote);
   if (!parsed) return null;
-  if (FORGE_HOSTS[parsed.host] === 'github') {
+  if (classifyParsed(parsed, repoInfo.root) === 'github') {
     return createGithubDriver(repoInfo.root, { owner: parsed.owner, repo: parsed.repo });
   }
   return null;

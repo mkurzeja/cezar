@@ -21,8 +21,20 @@ export const backendCheckSchema = z.object({
 });
 export type BackendCheck = z.infer<typeof backendCheckSchema>;
 
+/**
+ * Which code forge a remote belongs to — the ONE definition, used by `health.forge.kind` and by
+ * `projects.forge?` (and imported by the cockpit, which needs it to know how a forge spells a URL).
+ *
+ * An enum rather than a literal since the GitLab spec's Phase 2. Widening it is additive: a
+ * consumer that only knows `'github'` is unaffected, but one that switches on it must treat an
+ * unrecognized value as "some forge". The server's `ForgeKind` (`src/server/forge/types.ts`)
+ * mirrors this; `contract-parity*.test.ts` fails if the two drift.
+ */
+export const forgeKindSchema = z.enum(['github', 'gitlab']);
+export type ForgeKind = z.infer<typeof forgeKindSchema>;
+
 export const forgeInfoSchema = z.object({
-  kind: z.literal('github'),
+  kind: forgeKindSchema,
   /**
    * Whether the forge is reachable — **absent until the availability probe has warmed**.
    *

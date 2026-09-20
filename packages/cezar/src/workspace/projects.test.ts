@@ -195,11 +195,28 @@ describe('workspace projects', () => {
       expect(entry).toMatchObject({ status: 'ok', forge: 'github' });
     });
 
-    it('omits forge for a non-github remote and for a remote-less repo', async () => {
-      const gitlab = makeRepo('lab');
-      execFileSync('git', ['remote', 'add', 'origin', 'git@gitlab.com:acme/lab.git'], { cwd: gitlab });
+    it('classifies a gitlab.com remote as the gitlab forge, subgroups and all', async () => {
+      const root = makeRepo('lab');
+      execFileSync('git', ['remote', 'add', 'origin', 'git@gitlab.com:group/sub/lab.git'], { cwd: root });
+      await registerProject(root);
+      const [entry] = await listProjects();
+      // The whole path, not the last two segments: `https://gitlab.com/sub/lab` 404s.
+      expect(entry).toMatchObject({
+        status: 'ok',
+        forge: 'gitlab',
+        repoUrl: 'https://gitlab.com/group/sub/lab',
+      });
+    });
+
+    it('omits forge for an unrecognized host and for a remote-less repo', async () => {
+      const selfHosted = makeRepo('elsewhere');
+      // A host no table ships and `glab` has not been authenticated against — the plain-git
+      // cockpit, which is the correct answer and not a degradation.
+      execFileSync('git', ['remote', 'add', 'origin', 'git@git.unknown.internal:acme/app.git'], {
+        cwd: selfHosted,
+      });
       const bare = makeRepo('loner');
-      await registerProject(gitlab);
+      await registerProject(selfHosted);
       await registerProject(bare);
       const entries = await listProjects();
       expect(entries.every((entry) => entry.forge === undefined)).toBe(true);

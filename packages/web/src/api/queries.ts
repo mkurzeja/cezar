@@ -77,7 +77,12 @@ import {
   putAgentConfigFile,
   retryProviderAuth,
 } from './client'
-import { queryScope, REFERENCE_STATUS_MAX, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
+import {
+  queryScope,
+  REFERENCE_STATUS_MAX,
+  runnerDiscoversModels,
+  type ForgeKind,
+} from '@open-mercato/cezar-api-client'
 import { useProjectScope } from './project-scope-context'
 import { isReferenceStatus } from '@/lib/reference-status'
 import { githubRepoBase } from '@/lib/tasks-table'
@@ -729,9 +734,15 @@ export function useHealth() {
 }
 
 /**
- * The GitHub web root (`https://github.com/owner/repo`) of the project currently on screen, or
- * undefined when it cannot be proven — the only authority `taskIssueUrl` may synthesize a link
- * against (#526).
+ * The web root (`https://github.com/owner/repo`) of the project currently on screen **and the
+ * forge that spells URLs under it**, or undefined when the root cannot be proven — the only
+ * authority `taskIssueUrl` / `taskReferences` may synthesize a link against (#526).
+ *
+ * The two travel together, out of ONE resolution, on purpose: a base from the registry row and a
+ * forge from anywhere else would eventually pair a GitLab project's root with GitHub's `/pull/N`
+ * spelling, which is a hard 404 on gitlab.com rather than a redirect (spec
+ * `2026-09-20-gitlab-forge-support` §Identifiers). Returning a pair makes that pairing
+ * unrepresentable instead of merely discouraged.
  *
  * The boot-project guard is the load-bearing part. `/health` is WORKSPACE-level (project-scope.ts
  * `WORKSPACE_LEVEL`): the server always builds it from `bootRoot`, so its `repo.remote` names the
@@ -747,15 +758,28 @@ export function useHealth() {
  * over. Health stays the fallback, and stays boot-only, so an unregistered boot folder (or a
  * registry that has not loaded yet) keeps answering exactly as before.
  */
-export function useProjectRepoBase(): string | undefined {
+export function useProjectRepo(): { base: string | undefined; forge: ForgeKind | undefined } {
   const health = useHealth().data
   const projects = useProjects().data?.projects
   const { projectId } = useProjectScope()
   const scopedId = projectId ?? health?.bootProject
   const registered = scopedId === undefined ? undefined : projects?.find((project) => project.id === scopedId)
-  if (registered?.repoUrl) return registered.repoUrl
+  // The registry classifies the remote server-side and serves both halves on the same row, so
+  // this branch cannot mix repositories. An entry with a `repoUrl` but no `forge` — a registry
+  // written by a cezar older than the classifier — spells GitHub, which is what it always did.
+  if (registered?.repoUrl) return { base: registered.repoUrl, forge: registered.forge }
   const isBootProject = projectId === null || projectId === health?.bootProject
-  return isBootProject ? githubRepoBase(health?.repo?.remote) : undefined
+  // The health fallback is github.com-only *by construction*: `githubRepoBase` returns undefined
+  // for every other host, so a base coming out of it is always a GitHub one. Naming the forge here
+  // rather than leaving it undefined is therefore a statement of fact, not a default.
+  const fallback = isBootProject ? githubRepoBase(health?.repo?.remote) : undefined
+  return { base: fallback, forge: fallback ? 'github' : undefined }
+}
+
+/** The base half of `useProjectRepo()`, for surfaces that only need somewhere to point and never
+ *  spell a path under it themselves. */
+export function useProjectRepoBase(): string | undefined {
+  return useProjectRepo().base
 }
 
 /** The local "Open in…" targets (#open-in). Machine-level and stable, so it caches broadly;

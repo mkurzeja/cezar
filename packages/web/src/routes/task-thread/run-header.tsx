@@ -30,7 +30,7 @@ import {
   useOpenTargets,
   usePatchRun,
   usePinRun,
-  useProjectRepoBase,
+  useProjectRepo,
   useReferenceProjectId,
   useProviderStatus,
   useRunHandoff,
@@ -701,13 +701,14 @@ function MetaRow({
   automationsAvailable: boolean
 }) {
   // #526: the issue chip may be synthesized from the CEZ:ISSUE marker, and the only repository
-  // such a link may name is the one on screen — never the transcript's.
-  const repoBase = useProjectRepoBase()
+  // such a link may name is the one on screen — never the transcript's. The forge rides along
+  // from the same resolution, because it is what decides how a synthesized path is spelled.
+  const { base: repoBase, forge } = useProjectRepo()
   // At most two references here, so this is a batch of one or two rather than of a table — but it
   // goes through the same seam, which is what keeps the header's chip and the table's chip
   // answering identically for the same PR.
   const projectId = useReferenceProjectId()
-  const references = useMemo(() => taskReferences(run, repoBase), [run, repoBase])
+  const references = useMemo(() => taskReferences(run, repoBase, forge), [run, repoBase, forge])
   const referenceRequests = useMemo(
     () =>
       projectId === undefined
@@ -768,7 +769,7 @@ function MetaRow({
       />,
     )
   }
-  const issueUrl = taskIssueUrl(run, repoBase)
+  const issueUrl = taskIssueUrl(run, repoBase, forge)
   if (issueUrl && isHttpUrl(issueUrl)) {
     const number = prNumber(issueUrl)
     parts.push(
