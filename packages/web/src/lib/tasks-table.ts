@@ -107,11 +107,13 @@ export function finishedRunCount(runs: readonly RunRecord[]): number {
 }
 
 /** A git remote as a GitHub web root (`https://github.com/owner/repo`) — the caller passes the
- *  remote `/api/v1/health` reports (`repo.remote`), via `useProjectRepoBase`. Handles the scheme forms
+ *  remote `/api/v1/health` reports (`repo.remote`), via `useProjectRepo`. Handles the scheme forms
  *  (`https://`, `ssh://`, credentials, port) and the scp-like `git@github.com:owner/repo.git`;
- *  undefined for every non-github.com host, local path, or absent remote — the cockpit only knows
- *  how to spell GitHub issue URLs. Mirrors the server's `parseRemote` (`src/server/forge/index.ts`),
- *  duplicated rather than imported because that module is server-only. */
+ *  undefined for every non-github.com host, local path, or absent remote — this is the health
+ *  FALLBACK, and the one host it parses is why that fallback's forge is always `'github'`. A
+ *  project on any other forge gets its web root pre-built by the server, off the registry row.
+ *  Mirrors the server's `parseRemote` (`src/server/forge/index.ts`), duplicated rather than
+ *  imported because that module is server-only. */
 export function githubRepoBase(remote: string | undefined): string | undefined {
   if (!remote) return undefined
   const trimmed = remote.trim().replace(/\/+$/, '')
@@ -126,6 +128,39 @@ export function githubRepoBase(remote: string | undefined): string | undefined {
   const owner = parts[parts.length - 2]
   const repo = parts[parts.length - 1]
   return owner && repo ? `https://github.com/${owner}/${repo}` : undefined
+}
+
+/**
+ * Which forge a project's remote belongs to, for the one thing this module needs it for: knowing
+ * how that forge SPELLS a reference URL.
+ *
+ * Declared here rather than imported because the contract's `projects.forge` is still the literal
+ * `'github'` on this branch — the widening lands with the server's classifier (spec
+ * `2026-09-20-gitlab-forge-support`, Phase 2 step 4). The narrower contract value assigns into this
+ * union without a cast, so the day it widens this alias can be deleted and the contract's own
+ * `ForgeKind` imported in its place; nothing else has to move.
+ */
+export type ForgeKind = 'github' | 'gitlab'
+
+/**
+ * How a forge spells the path to a reference, under the repository's web root.
+ *
+ * GitHub hangs both resources straight off the repo root; GitLab namespaces every repo-level
+ * resource behind `/-/` and calls a pull request a merge request (spec
+ * `2026-09-20-gitlab-forge-support` §Identifiers). `/pull/N` has never existed on gitlab.com — it
+ * is a hard 404, not a redirect — so a project whose remote the server classified as `gitlab` can
+ * never be handed GitHub's spelling.
+ *
+ * An ABSENT forge keeps GitHub's spelling, and that is the load-bearing default: it is what every
+ * synthesized link was before forges were told apart, so a github.com user (whose registry entry
+ * may also simply predate the classifier) sees byte-identical URLs. The pass-through is only safe
+ * because the caller above it has already refused to synthesize anything without a `repoBase`, and
+ * a `repoBase` for a GitLab project cannot exist until the server that classifies it also reports
+ * `forge: 'gitlab'` — the two arrive from the same registry row (`useProjectRepo`), never from two.
+ */
+function referencePath(kind: TaskReference['kind'], forge: ForgeKind | undefined): string {
+  if (forge === 'gitlab') return kind === 'PR' ? '-/merge_requests' : '-/issues'
+  return kind === 'PR' ? 'pull' : 'issues'
 }
 
 /** The URL a PR *display* chip shows: the PR the task created, else the PR the conversation
@@ -157,10 +192,15 @@ function prUrls(run: TaskReferenceInput): string[] {
 /** Display-only issue association. Action gates must continue to use their created-resource
  * fields directly; this accessor exists only for links painted by the cockpit.
  *
- * `repoBase` is the repository of the project on screen (`useProjectRepoBase()`) and is the only
+ * `repoBase` is the repository of the project on screen (`useProjectRepo()`) and is the only
  * authority a *synthesized* link may be built on. Callers without it get today's behavior:
- * a discovered URL or nothing. */
-export function taskIssueUrl(run: TaskReferenceInput, repoBase?: string): string | undefined {
+ * a discovered URL or nothing. `forge` is that SAME project's classification and decides only how
+ * the path is spelled; absent, it spells GitHub, exactly as this function always has. */
+export function taskIssueUrl(
+  run: TaskReferenceInput,
+  repoBase?: string,
+  forge?: ForgeKind,
+): string | undefined {
   if (run.referencedIssueUrl) return run.referencedIssueUrl
   // #526: an issue-subject run (om-prepare-issue) knows its issue number from the CEZ:ISSUE
   // marker even when no full `…/issues/N` link was ever scanned into referencedIssueUrl.
@@ -169,8 +209,11 @@ export function taskIssueUrl(run: TaskReferenceInput, repoBase?: string): string
   // `CEZ:ISSUE=524` beside an incidental `github.com/other/repo/pull/1` would rebuild the exact
   // wrong-link defect #526 exists to kill, just pointing at an issue instead of a PR.
   const number = run.markerRefs?.issue ?? run.issueNumber
-  if (!number || !repoBase) return undefined
-  return `${repoBase}/issues/${number}`
+  if (!number) return undefined
+  // Through the same builder the chip list uses, rather than a second copy of the `…/issues/N`
+  // shape: two spellings of one rule is how a forge gets fixed in one place and left 404ing in
+  // the other.
+  return synthesizeUrl('Issue', number, repoBase, forge)
 }
 
 /**
@@ -245,7 +288,11 @@ export interface TaskReference {
  *
  * Deduped by kind+number, so one reference reached through two fields stays one chip.
  */
-export function taskReferences(run: TaskReferenceInput, repoBase?: string): TaskReference[] {
+export function taskReferences(
+  run: TaskReferenceInput,
+  repoBase?: string,
+  forge?: ForgeKind,
+): TaskReference[] {
   const prs = prUrls(run)
   const declared = run.markerRefs?.pr
   const sources: { kind: TaskReference['kind']; url?: string; number?: number }[] = [
@@ -259,7 +306,7 @@ export function taskReferences(run: TaskReferenceInput, repoBase?: string): Task
     // Numeric-only: a reference known by number before any URL was scraped. `repoBase` turns it
     // into a real link — see the synthesis note below.
     { kind: 'PR', number: run.prNumber },
-    { kind: 'Issue', url: taskIssueUrl(run, repoBase) },
+    { kind: 'Issue', url: taskIssueUrl(run, repoBase, forge) },
     { kind: 'Issue', number: run.issueNumber },
   ]
 
@@ -275,20 +322,22 @@ export function taskReferences(run: TaskReferenceInput, repoBase?: string): Task
     // `taskIssueUrl` already applies, and the same hard limit: only ever the project's repo,
     // never a URL scraped from a transcript, which routinely names another repository (#526).
     // Without a `repoBase` the chip stays inert text rather than linking somewhere invented.
-    const url = source.url ?? synthesizeUrl(source.kind, number, repoBase)
+    const url = source.url ?? synthesizeUrl(source.kind, number, repoBase, forge)
     references.push({ kind: source.kind, number, ...(url ? { url } : {}) })
   }
   return references
 }
 
-/** `#402` on a known repo → its forge URL. Undefined without a repo to build it from. */
+/** `#402` on a known repo → its forge URL, spelled the way that forge spells it
+ *  (`referencePath`). Undefined without a repo to build it from. */
 function synthesizeUrl(
   kind: TaskReference['kind'],
   number: number,
   repoBase: string | undefined,
+  forge: ForgeKind | undefined,
 ): string | undefined {
   if (!repoBase) return undefined
-  return `${repoBase}/${kind === 'PR' ? 'pull' : 'issues'}/${number}`
+  return `${repoBase}/${referencePath(kind, forge)}/${number}`
 }
 
 /** The strongest known tracker reference — what a row with space for exactly one shows (the
