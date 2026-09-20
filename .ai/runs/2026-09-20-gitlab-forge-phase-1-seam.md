@@ -73,9 +73,17 @@ remote-less checkout.
   assertions (`expect(body.repo).toBeNull()` for "a tmp dir — not a git repo") fail on code this
   branch does not touch. Re-running with `TMPDIR=/tmp` is green. An environment artifact, not a
   finding, but worth recording: those tests assume the system temp dir is outside any repository.
+- This session runs with `CEZ_*` variables set (it *is* a cezar task), which two `workflows/` tests
+  assert are absent — `system-prompt.test.ts` ("without `CEZ_FOLLOWUPS` …") and
+  `agent-profile-wiring.test.ts` ("the zero-config env is untouched"). Green with those vars
+  cleared. Same class as the `TMPDIR` artifact, on code this branch does not change.
 - One web test (`github.test.tsx`, "Custom prompt") failed once on a heavily loaded full-suite run
   and passes both in isolation and on a clean re-run of the whole web suite — a `waitFor` timeout
   under contention. This branch changes no cockpit code.
+
+The authoritative gate run — `TMPDIR=/tmp`, `CEZ_*` cleared — is green end to end: **392 test
+files, 7299 tests, 0 failures**, plus 36/36 `test:unit`, `check:pack ok`, and 16/16
+`test:package`.
 
 ## ⚠️ Risks
 
@@ -111,10 +119,11 @@ remote-less checkout.
 
 ### Phase 3: Repoint the eight routes
 
+- [x] 3.0 Post-review: cover the no-forge degrade branches the repoint introduced — 0106e7d0
 - [x] 3.1 Add `resolveReadForge` and repoint the six directly-importing routes onto driver methods — 877b0bda
 - [x] 3.2 Repoint server.ts's cache helpers at the extracted module and drop the dead imports — 877b0bda
 
 ### Phase 4: Validation
 
-- [x] 4.1 Full validation gate green — `npm run typecheck` ✅ · `npm test` ✅ (server 1388/1388, web+api-client+contract 3876/3876) · `npm run test:unit` ✅ 36/36 · `npm run build` ✅ (`check:pack ok`) · `npm run test:package` ✅ 16/16
-- [ ] 4.2 Authoritative review pass applied
+- [x] 4.1 Full validation gate green — `npm run typecheck` ✅ · `npm test` ✅ 392 files / 7299 tests / 0 failures · `npm run test:unit` ✅ 36/36 · `npm run build` ✅ (`check:pack ok — 536 files`) · `npm run test:package` ✅ 16/16
+- [x] 4.2 Authoritative review pass applied — approve, no blockers/majors; the one gap it found (untested no-forge degrade branches) fixed in 0106e7d0
